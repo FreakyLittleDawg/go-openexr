@@ -592,3 +592,291 @@ func TestDefaultValues(t *testing.T) {
 		t.Errorf("WorldToCamera() on empty header = %v, want nil", got)
 	}
 }
+
+// TestGetEnvMapWrongType tests GetEnvMap when the attribute has wrong type.
+func TestGetEnvMapWrongType(t *testing.T) {
+	h := exr.NewScanlineHeader(100, 100)
+
+	// Set envmap with wrong type (string instead of uint8)
+	h.Set(&exr.Attribute{
+		Name:  AttrEnvMap,
+		Type:  exr.AttrTypeString,
+		Value: "latlong",
+	})
+
+	env, exists := GetEnvMap(h)
+	if exists {
+		t.Error("GetEnvMap should return false for wrong type")
+	}
+	if env != EnvMapLatLong {
+		t.Error("GetEnvMap should return default EnvMapLatLong for wrong type")
+	}
+}
+
+// TestGetWrapModesWrongType tests GetWrapModes when the attribute has wrong type.
+func TestGetWrapModesWrongType(t *testing.T) {
+	h := exr.NewScanlineHeader(100, 100)
+
+	// Set wrapmodes with wrong type (uint8 instead of string)
+	h.Set(&exr.Attribute{
+		Name:  AttrWrapModes,
+		Type:  exr.AttrTypeEnvmap,
+		Value: uint8(0),
+	})
+
+	w := GetWrapModes(h)
+	if w != nil {
+		t.Error("GetWrapModes should return nil for wrong type")
+	}
+}
+
+// TestParseWrapModesNoComma tests parseWrapModes with no comma separator.
+func TestParseWrapModesNoComma(t *testing.T) {
+	result := parseWrapModes("clamponly")
+	if result != nil {
+		t.Error("parseWrapModes should return nil for string without comma")
+	}
+}
+
+// TestParseWrapModesInvalidModes tests parseWrapModes with invalid mode names.
+func TestParseWrapModesInvalidModes(t *testing.T) {
+	tests := []string{
+		"invalid,clamp",   // Invalid horizontal
+		"clamp,invalid",   // Invalid vertical
+		"invalid,invalid", // Both invalid
+	}
+
+	for _, tt := range tests {
+		result := parseWrapModes(tt)
+		if result != nil {
+			t.Errorf("parseWrapModes(%q) should return nil", tt)
+		}
+	}
+}
+
+// TestFramesPerSecondWrongType tests FramesPerSecond when the attribute has wrong type.
+func TestFramesPerSecondWrongType(t *testing.T) {
+	h := exr.NewScanlineHeader(100, 100)
+
+	// Set framesPerSecond with wrong type (float instead of Rational)
+	h.Set(&exr.Attribute{
+		Name:  AttrFramesPerSecond,
+		Type:  exr.AttrTypeFloat,
+		Value: float32(24.0),
+	})
+
+	fps := FramesPerSecond(h)
+	if fps != nil {
+		t.Error("FramesPerSecond should return nil for wrong type")
+	}
+}
+
+// TestContinuedFractionEdgeCases tests continuedFraction with edge cases.
+func TestContinuedFractionEdgeCases(t *testing.T) {
+	// Test with very small denominator limit
+	r := FloatToRational(3.14159, 10)
+	if r.Denom > 10 {
+		t.Errorf("FloatToRational with maxDenom=10 returned denom=%d", r.Denom)
+	}
+
+	// Verify the result is reasonably close
+	result := RationalToFloat(r)
+	diff := result - 3.14159
+	if diff < 0 {
+		diff = -diff
+	}
+	// With small denominator limit, result won't be very accurate
+	if diff > 0.1 {
+		t.Errorf("FloatToRational(3.14159, 10) = %f, expected ~3.14159", result)
+	}
+
+	// Test exact integer
+	r = FloatToRational(7.0, 100)
+	if r.Num != 7 || r.Denom != 1 {
+		t.Errorf("FloatToRational(7.0) = %d/%d, want 7/1", r.Num, r.Denom)
+	}
+}
+
+// TestAdoptedNeutralWrongType tests AdoptedNeutral when the attribute has wrong type.
+func TestAdoptedNeutralWrongType(t *testing.T) {
+	h := exr.NewScanlineHeader(100, 100)
+
+	// Set adoptedNeutral with wrong type
+	h.Set(&exr.Attribute{
+		Name:  AttrAdoptedNeutral,
+		Type:  exr.AttrTypeFloat,
+		Value: float32(0.3127),
+	})
+
+	an := AdoptedNeutral(h)
+	if an != nil {
+		t.Error("AdoptedNeutral should return nil for wrong type")
+	}
+}
+
+// TestGetChromaticitiesWrongType tests GetChromaticities when the attribute has wrong type.
+func TestGetChromaticitiesWrongType(t *testing.T) {
+	h := exr.NewScanlineHeader(100, 100)
+
+	// Set chromaticities with wrong type
+	h.Set(&exr.Attribute{
+		Name:  AttrChromaticities,
+		Type:  exr.AttrTypeString,
+		Value: "srgb",
+	})
+
+	c := GetChromaticities(h)
+	if c != nil {
+		t.Error("GetChromaticities should return nil for wrong type")
+	}
+}
+
+// TestWorldToCameraWrongType tests WorldToCamera when the attribute has wrong type.
+func TestWorldToCameraWrongType(t *testing.T) {
+	h := exr.NewScanlineHeader(100, 100)
+
+	// Set worldToCamera with wrong type
+	h.Set(&exr.Attribute{
+		Name:  AttrWorldToCamera,
+		Type:  exr.AttrTypeString,
+		Value: "identity",
+	})
+
+	m := WorldToCamera(h)
+	if m != nil {
+		t.Error("WorldToCamera should return nil for wrong type")
+	}
+}
+
+// TestWorldToNDCWrongType tests WorldToNDC when the attribute has wrong type.
+func TestWorldToNDCWrongType(t *testing.T) {
+	h := exr.NewScanlineHeader(100, 100)
+
+	// Set worldToNDC with wrong type
+	h.Set(&exr.Attribute{
+		Name:  AttrWorldToNDC,
+		Type:  exr.AttrTypeString,
+		Value: "identity",
+	})
+
+	m := WorldToNDC(h)
+	if m != nil {
+		t.Error("WorldToNDC should return nil for wrong type")
+	}
+}
+
+// TestSensorCenterOffsetWrongType tests SensorCenterOffset when the attribute has wrong type.
+func TestSensorCenterOffsetWrongType(t *testing.T) {
+	h := exr.NewScanlineHeader(100, 100)
+
+	// Set sensorCenterOffset with wrong type
+	h.Set(&exr.Attribute{
+		Name:  AttrSensorCenterOffset,
+		Type:  exr.AttrTypeFloat,
+		Value: float32(0.0),
+	})
+
+	offset := SensorCenterOffset(h)
+	if offset != nil {
+		t.Error("SensorCenterOffset should return nil for wrong type")
+	}
+}
+
+// TestSensorOverallDimensionsWrongType tests SensorOverallDimensions when the attribute has wrong type.
+func TestSensorOverallDimensionsWrongType(t *testing.T) {
+	h := exr.NewScanlineHeader(100, 100)
+
+	// Set sensorOverallDimensions with wrong type
+	h.Set(&exr.Attribute{
+		Name:  AttrSensorOverallDimensions,
+		Type:  exr.AttrTypeFloat,
+		Value: float32(36.0),
+	})
+
+	dims := SensorOverallDimensions(h)
+	if dims != nil {
+		t.Error("SensorOverallDimensions should return nil for wrong type")
+	}
+}
+
+// TestSensorAcquisitionRectangleWrongType tests SensorAcquisitionRectangle when the attribute has wrong type.
+func TestSensorAcquisitionRectangleWrongType(t *testing.T) {
+	h := exr.NewScanlineHeader(100, 100)
+
+	// Set sensorAcquisitionRectangle with wrong type
+	h.Set(&exr.Attribute{
+		Name:  AttrSensorAcquisitionRectangle,
+		Type:  exr.AttrTypeString,
+		Value: "0,0,1920,1080",
+	})
+
+	rect := SensorAcquisitionRectangle(h)
+	if rect != nil {
+		t.Error("SensorAcquisitionRectangle should return nil for wrong type")
+	}
+}
+
+// TestGetStringWrongType tests getString helper when the attribute has wrong type.
+func TestGetStringWrongType(t *testing.T) {
+	h := exr.NewScanlineHeader(100, 100)
+
+	// Set owner with wrong type
+	h.Set(&exr.Attribute{
+		Name:  AttrOwner,
+		Type:  exr.AttrTypeFloat,
+		Value: float32(1.0),
+	})
+
+	owner := Owner(h)
+	if owner != "" {
+		t.Errorf("Owner should return empty string for wrong type, got %q", owner)
+	}
+}
+
+// TestGetFloatWrongType tests getFloat helper when the attribute has wrong type.
+func TestGetFloatWrongType(t *testing.T) {
+	h := exr.NewScanlineHeader(100, 100)
+
+	// Set aperture with wrong type
+	h.Set(&exr.Attribute{
+		Name:  AttrAperture,
+		Type:  exr.AttrTypeString,
+		Value: "2.8",
+	})
+
+	aperture := Aperture(h)
+	if aperture != 0 {
+		t.Errorf("Aperture should return 0 for wrong type, got %f", aperture)
+	}
+}
+
+// TestGetV2fWrongType tests getV2f helper when the attribute has wrong type.
+func TestGetV2fWrongType(t *testing.T) {
+	h := exr.NewScanlineHeader(100, 100)
+
+	// Set cameraColorBalance with wrong type
+	h.Set(&exr.Attribute{
+		Name:  AttrCameraColorBalance,
+		Type:  exr.AttrTypeString,
+		Value: "0.3127,0.329",
+	})
+
+	info := GetCameraInfo(h)
+	if info.ColorBalance.X != 0 || info.ColorBalance.Y != 0 {
+		t.Errorf("ColorBalance should be zero for wrong type, got {%f, %f}", info.ColorBalance.X, info.ColorBalance.Y)
+	}
+}
+
+// TestContinuedFractionPrecision tests continued fraction with values that need many iterations.
+func TestContinuedFractionPrecision(t *testing.T) {
+	// Test value that doesn't match any common frame rate and exercises the iteration
+	r := FloatToRational(33.333, 1000)
+	result := RationalToFloat(r)
+	diff := result - 33.333
+	if diff < 0 {
+		diff = -diff
+	}
+	if diff > 0.001 {
+		t.Errorf("FloatToRational(33.333) = %f, expected ~33.333", result)
+	}
+}

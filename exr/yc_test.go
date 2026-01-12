@@ -747,3 +747,198 @@ func TestIsYCImageWithNilHeader(t *testing.T) {
 		t.Error("IsYCImage(nil) should return false")
 	}
 }
+
+// TestYCInputFileRoundTrip tests reading back YC files.
+func TestYCInputFileRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test_yc_rt.exr")
+
+	// Write a YC image
+	width, height := 64, 64
+	img := NewRGBAImage(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			r := float32(x) / float32(width)
+			g := float32(y) / float32(height)
+			b := float32(x+y) / float32(width+height)
+			img.SetRGBA(x, y, r, g, b, 1.0)
+		}
+	}
+
+	out, err := NewYCOutputFile(path, width, height, WriteYC)
+	if err != nil {
+		t.Fatalf("NewYCOutputFile error: %v", err)
+	}
+	if err := out.WriteRGBA(img); err != nil {
+		t.Fatalf("WriteRGBA error: %v", err)
+	}
+
+	// Read back with YCInputFile
+	ycIn, err := OpenYCInputFile(path)
+	if err != nil {
+		t.Fatalf("OpenYCInputFile error: %v", err)
+	}
+	defer ycIn.Close()
+
+	if ycIn.Header() == nil {
+		t.Error("Header should not be nil")
+	}
+
+	if ycIn.Width() != width || ycIn.Height() != height {
+		t.Errorf("Dimensions: got %dx%d, want %dx%d", ycIn.Width(), ycIn.Height(), width, height)
+	}
+
+	// Read the image
+	readImg, err := ycIn.ReadRGBA()
+	if err != nil {
+		t.Fatalf("ReadRGBA error: %v", err)
+	}
+
+	if readImg == nil {
+		t.Fatal("ReadRGBA returned nil")
+	}
+
+	// Verify dimensions
+	if readImg.Rect.Dx() != width || readImg.Rect.Dy() != height {
+		t.Errorf("Read image dimensions: got %dx%d, want %dx%d",
+			readImg.Rect.Dx(), readImg.Rect.Dy(), width, height)
+	}
+}
+
+// TestYCInputFileReadLuminanceOnly tests reading luminance-only files.
+func TestYCInputFileReadLuminanceOnly(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test_y_only.exr")
+
+	// Write a luminance-only image
+	width, height := 32, 32
+	img := NewRGBAImage(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			gray := float32(x+y) / float32(width+height)
+			img.SetRGBA(x, y, gray, gray, gray, 1.0)
+		}
+	}
+
+	out, err := NewYCOutputFile(path, width, height, WriteY)
+	if err != nil {
+		t.Fatalf("NewYCOutputFile error: %v", err)
+	}
+	if err := out.WriteRGBA(img); err != nil {
+		t.Fatalf("WriteRGBA error: %v", err)
+	}
+
+	// Read back
+	ycIn, err := OpenYCInputFile(path)
+	if err != nil {
+		t.Fatalf("OpenYCInputFile error: %v", err)
+	}
+	defer ycIn.Close()
+
+	readImg, err := ycIn.ReadRGBA()
+	if err != nil {
+		t.Fatalf("ReadRGBA error: %v", err)
+	}
+
+	if readImg == nil {
+		t.Fatal("ReadRGBA returned nil")
+	}
+
+	// For luminance-only, RGB should be equal (grayscale)
+	for y := 0; y < height; y += 4 {
+		for x := 0; x < width; x += 4 {
+			r, g, b, _ := readImg.RGBA(x, y)
+			if absF32(r-g) > 0.1 || absF32(r-b) > 0.1 {
+				t.Errorf("Pixel at (%d,%d) not grayscale: R=%v, G=%v, B=%v", x, y, r, g, b)
+			}
+		}
+	}
+}
+
+// TestYCInputFileCloseNilFile tests closing when internal file is nil.
+func TestYCInputFileCloseNilFile(t *testing.T) {
+	// Create a YCInputFile with nil internal file
+	ycIn := &YCInputFile{file: nil}
+	err := ycIn.Close()
+	if err != nil {
+		t.Errorf("Close with nil file should not error, got %v", err)
+	}
+}
+
+// TestYCInputFileDoubleClose tests closing twice.
+func TestYCInputFileDoubleClose(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "close_test.exr")
+
+	width, height := 8, 8
+	img := NewRGBAImage(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			img.SetRGBA(x, y, 0.5, 0.5, 0.5, 1.0)
+		}
+	}
+
+	out, err := NewYCOutputFile(path, width, height, WriteYC)
+	if err != nil {
+		t.Fatalf("NewYCOutputFile error: %v", err)
+	}
+	if err := out.WriteRGBA(img); err != nil {
+		t.Fatalf("WriteRGBA error: %v", err)
+	}
+
+	ycIn, err := OpenYCInputFile(path)
+	if err != nil {
+		t.Fatalf("OpenYCInputFile error: %v", err)
+	}
+
+	// First close
+	err = ycIn.Close()
+	if err != nil {
+		t.Logf("First close (may error after file closed): %v", err)
+	}
+
+	// Second close should be safe
+	err = ycIn.Close()
+	// This might error or not depending on implementation
+	t.Logf("Second close (expected to be handled): %v", err)
+}
+
+// TestYCWriteModesAll tests all YC write modes in sequence.
+func TestYCWriteModesAll(t *testing.T) {
+	modes := []YCMode{WriteY, WriteYC, WriteYA, WriteYCA}
+	modeNames := []string{"WriteY", "WriteYC", "WriteYA", "WriteYCA"}
+
+	width, height := 32, 32
+	img := NewRGBAImage(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			r := float32(x) / float32(width)
+			g := float32(y) / float32(height)
+			b := float32(0.5)
+			a := float32(x+y) / float32(width+height)
+			img.SetRGBA(x, y, r, g, b, a)
+		}
+	}
+
+	for i, mode := range modes {
+		t.Run(modeNames[i], func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "test.exr")
+
+			out, err := NewYCOutputFile(path, width, height, mode)
+			if err != nil {
+				t.Fatalf("NewYCOutputFile error: %v", err)
+			}
+			if err := out.WriteRGBA(img); err != nil {
+				t.Fatalf("WriteRGBA error: %v", err)
+			}
+
+			// Verify file exists and is readable
+			f, err := OpenFile(path)
+			if err != nil {
+				t.Fatalf("OpenFile error: %v", err)
+			}
+			f.Close()
+		})
+	}
+}

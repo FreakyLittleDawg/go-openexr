@@ -580,3 +580,236 @@ func TestReadKeyCodeErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestTimeCodeUserData(t *testing.T) {
+	tc := MustNewTimeCode(1, 30, 45, 12, false)
+
+	// Test default user data
+	if tc.UserData() != 0 {
+		t.Errorf("Default UserData = %d, want 0", tc.UserData())
+	}
+
+	// Test setting user data
+	tc.SetUserData(0x12345678)
+	if tc.UserData() != 0x12345678 {
+		t.Errorf("UserData after Set = %d, want 0x12345678", tc.UserData())
+	}
+}
+
+func TestTimeCodePackings(t *testing.T) {
+	tests := []struct {
+		name    string
+		packing TimeCodePacking
+	}{
+		{"TV50Packing", TV50Packing},
+		{"TV60Packing", TV60Packing},
+		{"Film24Packing", Film24Packing},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tc := MustNewTimeCode(12, 30, 45, 20, false)
+
+			// Set time and flags with packing
+			tc.SetTimeAndFlags(0x12345678, tt.packing)
+
+			// Get time and flags with packing
+			val := tc.TimeAndFlags(tt.packing)
+			// Just verify it doesn't panic and returns some value
+			_ = val
+		})
+	}
+}
+
+func TestV2dSerialization(t *testing.T) {
+	original := V2d{X: 1.5, Y: -2.5}
+	w := xdr.NewBufferWriter(32)
+	WriteV2d(w, original)
+
+	r := xdr.NewReader(w.Bytes())
+	result, err := ReadV2d(r)
+	if err != nil {
+		t.Fatalf("ReadV2d() error = %v", err)
+	}
+	if result != original {
+		t.Errorf("ReadV2d() = %v, want %v", result, original)
+	}
+}
+
+func TestV3dSerialization(t *testing.T) {
+	original := V3d{X: 1.0, Y: 2.0, Z: 3.0}
+	w := xdr.NewBufferWriter(32)
+	WriteV3d(w, original)
+
+	r := xdr.NewReader(w.Bytes())
+	result, err := ReadV3d(r)
+	if err != nil {
+		t.Fatalf("ReadV3d() error = %v", err)
+	}
+	if result != original {
+		t.Errorf("ReadV3d() = %v, want %v", result, original)
+	}
+}
+
+func TestM33dSerialization(t *testing.T) {
+	original := M33d{1, 2, 3, 4, 5, 6, 7, 8, 9}
+	w := xdr.NewBufferWriter(128)
+	WriteM33d(w, original)
+
+	r := xdr.NewReader(w.Bytes())
+	result, err := ReadM33d(r)
+	if err != nil {
+		t.Fatalf("ReadM33d() error = %v", err)
+	}
+	if result != original {
+		t.Errorf("ReadM33d() = %v, want %v", result, original)
+	}
+}
+
+func TestM44dSerialization(t *testing.T) {
+	original := M44d{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
+	w := xdr.NewBufferWriter(256)
+	WriteM44d(w, original)
+
+	r := xdr.NewReader(w.Bytes())
+	result, err := ReadM44d(r)
+	if err != nil {
+		t.Fatalf("ReadM44d() error = %v", err)
+	}
+	if result != original {
+		t.Errorf("ReadM44d() = %v, want %v", result, original)
+	}
+}
+
+func TestReadFloatVector(t *testing.T) {
+	// Create valid float vector data: count=3, followed by 3 floats
+	w := xdr.NewBufferWriter(32)
+	w.WriteInt32(3) // count
+	w.WriteFloat32(1.0)
+	w.WriteFloat32(2.0)
+	w.WriteFloat32(3.0)
+
+	r := xdr.NewReader(w.Bytes())
+	result, err := ReadFloatVector(r, 16) // 4 bytes count + 3*4 bytes floats
+	if err != nil {
+		t.Fatalf("ReadFloatVector() error = %v", err)
+	}
+	if len(result) != 3 {
+		t.Errorf("ReadFloatVector() length = %d, want 3", len(result))
+	}
+	if result[0] != 1.0 || result[1] != 2.0 || result[2] != 3.0 {
+		t.Errorf("ReadFloatVector() = %v, want [1.0, 2.0, 3.0]", result)
+	}
+}
+
+func TestReadFloatVectorErrors(t *testing.T) {
+	t.Run("TooSmallSize", func(t *testing.T) {
+		r := xdr.NewReader([]byte{0, 0, 0, 0})
+		_, err := ReadFloatVector(r, 3) // Size too small
+		if err == nil {
+			t.Error("ReadFloatVector with size < 4 should error")
+		}
+	})
+
+	t.Run("NegativeCount", func(t *testing.T) {
+		// Create data with negative count
+		w := xdr.NewBufferWriter(8)
+		w.WriteInt32(-1)
+		r := xdr.NewReader(w.Bytes())
+		_, err := ReadFloatVector(r, 4)
+		if err == nil {
+			t.Error("ReadFloatVector with negative count should error")
+		}
+	})
+
+	t.Run("SizeMismatch", func(t *testing.T) {
+		// Create data with count=2 but provide wrong size
+		w := xdr.NewBufferWriter(32)
+		w.WriteInt32(2)
+		w.WriteFloat32(1.0)
+		w.WriteFloat32(2.0)
+		r := xdr.NewReader(w.Bytes())
+		_, err := ReadFloatVector(r, 8) // Wrong size - should be 12
+		if err == nil {
+			t.Error("ReadFloatVector with size mismatch should error")
+		}
+	})
+}
+
+func TestReadFloatVectorEmpty(t *testing.T) {
+	// Create valid float vector with count=0
+	w := xdr.NewBufferWriter(8)
+	w.WriteInt32(0) // count = 0
+
+	r := xdr.NewReader(w.Bytes())
+	result, err := ReadFloatVector(r, 4) // Just the count, no floats
+	if err != nil {
+		t.Fatalf("ReadFloatVector() error = %v", err)
+	}
+	if len(result) != 0 {
+		t.Errorf("ReadFloatVector() length = %d, want 0", len(result))
+	}
+}
+
+func TestWriteFloatVector(t *testing.T) {
+	original := FloatVector{1.5, 2.5, 3.5}
+	w := xdr.NewBufferWriter(32)
+	WriteFloatVector(w, original)
+
+	// Read back
+	r := xdr.NewReader(w.Bytes())
+	result, err := ReadFloatVector(r, 16) // 4 + 3*4 = 16
+	if err != nil {
+		t.Fatalf("ReadFloatVector() error = %v", err)
+	}
+	if len(result) != len(original) {
+		t.Errorf("Length = %d, want %d", len(result), len(original))
+	}
+	for i := range original {
+		if result[i] != original[i] {
+			t.Errorf("FloatVector[%d] = %f, want %f", i, result[i], original[i])
+		}
+	}
+}
+
+func TestMustNewTimeCodePanic(t *testing.T) {
+	// MustNewTimeCode should panic on invalid input
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("MustNewTimeCode with invalid frames should panic")
+		}
+	}()
+
+	// 60 frames is invalid (max is typically 59)
+	_ = MustNewTimeCode(0, 0, 0, 60, false)
+}
+
+func TestMustNewTimeCodeInvalidHours(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("MustNewTimeCode with invalid hours should panic")
+		}
+	}()
+
+	_ = MustNewTimeCode(25, 0, 0, 0, false) // 25 hours is invalid
+}
+
+func TestMustNewTimeCodeInvalidMinutes(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("MustNewTimeCode with invalid minutes should panic")
+		}
+	}()
+
+	_ = MustNewTimeCode(0, 60, 0, 0, false) // 60 minutes is invalid
+}
+
+func TestMustNewTimeCodeInvalidSeconds(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("MustNewTimeCode with invalid seconds should panic")
+		}
+	}()
+
+	_ = MustNewTimeCode(0, 0, 60, 0, false) // 60 seconds is invalid
+}

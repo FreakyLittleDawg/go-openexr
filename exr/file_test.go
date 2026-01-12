@@ -896,3 +896,264 @@ func TestReadTileChunkErrors(t *testing.T) {
 		t.Error("ReadTileChunk with invalid chunk index should error")
 	}
 }
+
+func TestFileSupportsZeroCopy(t *testing.T) {
+	fileData, _ := createTestFile(t)
+	r := &readerAtWrapper{bytes.NewReader(fileData)}
+
+	f, err := OpenReader(r, int64(len(fileData)))
+	if err != nil {
+		t.Fatalf("OpenReader() error = %v", err)
+	}
+
+	// Test SupportsZeroCopy - should return false for non-slicer readers
+	if f.SupportsZeroCopy() {
+		t.Error("SupportsZeroCopy should be false for standard ReaderAt")
+	}
+}
+
+func TestFileOffsetsRef(t *testing.T) {
+	fileData, _ := createTestFile(t)
+	r := &readerAtWrapper{bytes.NewReader(fileData)}
+
+	f, err := OpenReader(r, int64(len(fileData)))
+	if err != nil {
+		t.Fatalf("OpenReader() error = %v", err)
+	}
+
+	// Test OffsetsRef
+	offsetsRef := f.OffsetsRef(0)
+	if offsetsRef == nil {
+		t.Error("OffsetsRef(0) should not return nil")
+	}
+
+	// Test invalid part index
+	if f.OffsetsRef(-1) != nil {
+		t.Error("OffsetsRef(-1) should return nil")
+	}
+	if f.OffsetsRef(100) != nil {
+		t.Error("OffsetsRef(100) should return nil")
+	}
+}
+
+func TestWriteTileChunkPartSinglePart(t *testing.T) {
+	// Create a tiled file
+	h := NewTiledHeader(8, 8, 4, 4)
+	h.SetCompression(CompressionNone)
+
+	ws := newMockWriteSeeker()
+	w, err := NewWriter(ws, h)
+	if err != nil {
+		t.Fatalf("NewWriter() error = %v", err)
+	}
+
+	// Write tile chunks using WriteTileChunkPart for single-part file
+	tileData := make([]byte, 4*4*6) // 4x4 pixels, 3 channels, 2 bytes each
+	for ty := 0; ty < 2; ty++ {
+		for tx := 0; tx < 2; tx++ {
+			if err := w.WriteTileChunkPart(0, tx, ty, 0, 0, tileData); err != nil {
+				t.Fatalf("WriteTileChunkPart error = %v", err)
+			}
+		}
+	}
+
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func TestWriteTileChunkPartMultiPart(t *testing.T) {
+	// Create a multi-part tiled file
+	h1 := NewTiledHeader(8, 8, 4, 4)
+	h1.SetCompression(CompressionNone)
+	h1.Set(&Attribute{Name: AttrNameName, Type: AttrTypeString, Value: "part1"})
+	h1.Set(&Attribute{Name: AttrNameType, Type: AttrTypeString, Value: PartTypeTiled})
+
+	h2 := NewTiledHeader(8, 8, 4, 4)
+	h2.SetCompression(CompressionNone)
+	h2.Set(&Attribute{Name: AttrNameName, Type: AttrTypeString, Value: "part2"})
+	h2.Set(&Attribute{Name: AttrNameType, Type: AttrTypeString, Value: PartTypeTiled})
+
+	ws := newMockWriteSeeker()
+	w, err := NewMultiPartWriter(ws, []*Header{h1, h2})
+	if err != nil {
+		t.Fatalf("NewMultiPartWriter() error = %v", err)
+	}
+
+	// Write tiles to both parts using WriteTileChunkPart
+	tileData := make([]byte, 4*4*6)
+	for part := 0; part < 2; part++ {
+		for ty := 0; ty < 2; ty++ {
+			for tx := 0; tx < 2; tx++ {
+				if err := w.WriteTileChunkPart(part, tx, ty, 0, 0, tileData); err != nil {
+					t.Fatalf("WriteTileChunkPart(part=%d) error = %v", part, err)
+				}
+			}
+		}
+	}
+
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func TestWriteTileChunkPartErrors(t *testing.T) {
+	h := NewTiledHeader(8, 8, 4, 4)
+	h.SetCompression(CompressionNone)
+
+	ws := newMockWriteSeeker()
+	w, err := NewWriter(ws, h)
+	if err != nil {
+		t.Fatalf("NewWriter() error = %v", err)
+	}
+
+	// Test invalid part index (negative)
+	tileData := make([]byte, 4*4*6)
+	err = w.WriteTileChunkPart(-1, 0, 0, 0, 0, tileData)
+	if err == nil {
+		t.Error("WriteTileChunkPart with negative part should error")
+	}
+
+	// Test invalid part index (too large)
+	err = w.WriteTileChunkPart(100, 0, 0, 0, 0, tileData)
+	if err == nil {
+		t.Error("WriteTileChunkPart with part >= len(offsets) should error")
+	}
+
+	// Write all tiles
+	for ty := 0; ty < 2; ty++ {
+		for tx := 0; tx < 2; tx++ {
+			if err := w.WriteTileChunkPart(0, tx, ty, 0, 0, tileData); err != nil {
+				t.Fatalf("WriteTileChunkPart error = %v", err)
+			}
+		}
+	}
+
+	// Test writing after all chunks are written
+	err = w.WriteTileChunkPart(0, 0, 0, 0, 0, tileData)
+	if err == nil {
+		t.Error("WriteTileChunkPart after all chunks should error")
+	}
+
+	w.Close()
+
+	// Test writing after close
+	err = w.WriteTileChunkPart(0, 0, 0, 0, 0, tileData)
+	if err == nil {
+		t.Error("WriteTileChunkPart after close should error")
+	}
+}
+
+func TestWriteChunkPartErrors(t *testing.T) {
+	h := NewScanlineHeader(4, 4)
+	h.SetCompression(CompressionNone)
+
+	ws := newMockWriteSeeker()
+	w, err := NewWriter(ws, h)
+	if err != nil {
+		t.Fatalf("NewWriter() error = %v", err)
+	}
+
+	// Test invalid part index (negative)
+	data := make([]byte, 24)
+	err = w.WriteChunkPart(-1, 0, data)
+	if err == nil {
+		t.Error("WriteChunkPart with negative part should error")
+	}
+
+	// Test invalid part index (too large)
+	err = w.WriteChunkPart(100, 0, data)
+	if err == nil {
+		t.Error("WriteChunkPart with part >= len(offsets) should error")
+	}
+
+	// Write all scanlines
+	for y := 0; y < 4; y++ {
+		if err := w.WriteChunkPart(0, int32(y), data); err != nil {
+			t.Fatalf("WriteChunkPart(y=%d) error = %v", y, err)
+		}
+	}
+
+	// Test writing after all chunks are written
+	err = w.WriteChunkPart(0, 0, data)
+	if err == nil {
+		t.Error("WriteChunkPart after all chunks should error")
+	}
+
+	w.Close()
+
+	// Test writing after close
+	err = w.WriteChunkPart(0, 0, data)
+	if err == nil {
+		t.Error("WriteChunkPart after close should error")
+	}
+}
+
+func TestMultiPartWriterAutoSetType(t *testing.T) {
+	h := NewScanlineHeader(4, 4)
+	h.SetCompression(CompressionNone)
+	h.Set(&Attribute{Name: AttrNameName, Type: AttrTypeString, Value: "part1"})
+	// No type set, should be auto-set to scanline
+
+	ws := newMockWriteSeeker()
+	w, err := NewMultiPartWriter(ws, []*Header{h})
+	if err != nil {
+		t.Fatalf("NewMultiPartWriter() error = %v", err)
+	}
+
+	// Check type was auto-set
+	typeAttr := h.Get(AttrNameType)
+	if typeAttr == nil || typeAttr.Value.(string) != PartTypeScanline {
+		t.Errorf("Type = %v, want %s", typeAttr, PartTypeScanline)
+	}
+
+	w.Close()
+}
+
+func TestMultiPartWriterTiledAutoSetType(t *testing.T) {
+	h := NewTiledHeader(8, 8, 4, 4)
+	h.SetCompression(CompressionNone)
+	h.Set(&Attribute{Name: AttrNameName, Type: AttrTypeString, Value: "part1"})
+	// No type set, should be auto-set to tiled
+
+	ws := newMockWriteSeeker()
+	w, err := NewMultiPartWriter(ws, []*Header{h})
+	if err != nil {
+		t.Fatalf("NewMultiPartWriter() error = %v", err)
+	}
+
+	// Check type was auto-set
+	typeAttr := h.Get(AttrNameType)
+	if typeAttr == nil || typeAttr.Value.(string) != PartTypeTiled {
+		t.Errorf("Type = %v, want %s", typeAttr, PartTypeTiled)
+	}
+
+	w.Close()
+}
+
+func TestWriterDoubleClose(t *testing.T) {
+	h := NewScanlineHeader(4, 4)
+	h.SetCompression(CompressionNone)
+
+	ws := newMockWriteSeeker()
+	w, err := NewWriter(ws, h)
+	if err != nil {
+		t.Fatalf("NewWriter() error = %v", err)
+	}
+
+	// Write some data
+	data := make([]byte, 24)
+	for y := 0; y < 4; y++ {
+		w.WriteChunk(int32(y), data)
+	}
+
+	// First close should succeed
+	if err := w.Close(); err != nil {
+		t.Fatalf("First Close() error = %v", err)
+	}
+
+	// Second close should be no-op
+	if err := w.Close(); err != nil {
+		t.Errorf("Second Close() error = %v, want nil", err)
+	}
+}

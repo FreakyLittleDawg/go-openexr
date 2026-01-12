@@ -1540,3 +1540,226 @@ func TestMultiPartOutputWithB44(t *testing.T) {
 	mpo.Close()
 	t.Logf("B44 multipart file size: %d bytes", buf.Len())
 }
+
+func TestMultiPartSetFrameBufferErrors(t *testing.T) {
+	width, height := 8, 8
+
+	h := NewScanlineHeader(width, height)
+	h.Set(&Attribute{Name: AttrNameName, Type: AttrTypeString, Value: "part1"})
+	h.Set(&Attribute{Name: AttrNameType, Type: AttrTypeString, Value: PartTypeScanline})
+	h.SetCompression(CompressionNone)
+
+	var buf bytes.Buffer
+	ws := &seekableWriter{Buffer: &buf}
+
+	mpo, err := NewMultiPartOutputFile(ws, []*Header{h})
+	if err != nil {
+		t.Fatalf("NewMultiPartOutputFile() error = %v", err)
+	}
+	defer mpo.Close()
+
+	// Test invalid part index (negative)
+	err = mpo.SetFrameBuffer(-1, NewFrameBuffer())
+	if err != ErrPartNotFound {
+		t.Errorf("SetFrameBuffer(-1) error = %v, want ErrPartNotFound", err)
+	}
+
+	// Test invalid part index (too large)
+	err = mpo.SetFrameBuffer(100, NewFrameBuffer())
+	if err != ErrPartNotFound {
+		t.Errorf("SetFrameBuffer(100) error = %v, want ErrPartNotFound", err)
+	}
+}
+
+func TestMultiPartWritePixelsErrors(t *testing.T) {
+	width, height := 8, 8
+
+	h := NewScanlineHeader(width, height)
+	h.Set(&Attribute{Name: AttrNameName, Type: AttrTypeString, Value: "part1"})
+	h.Set(&Attribute{Name: AttrNameType, Type: AttrTypeString, Value: PartTypeScanline})
+	h.SetCompression(CompressionNone)
+
+	var buf bytes.Buffer
+	ws := &seekableWriter{Buffer: &buf}
+
+	mpo, err := NewMultiPartOutputFile(ws, []*Header{h})
+	if err != nil {
+		t.Fatalf("NewMultiPartOutputFile() error = %v", err)
+	}
+	defer mpo.Close()
+
+	// Test invalid part index (negative)
+	err = mpo.WritePixels(-1, height)
+	if err != ErrPartNotFound {
+		t.Errorf("WritePixels(-1) error = %v, want ErrPartNotFound", err)
+	}
+
+	// Test invalid part index (too large)
+	err = mpo.WritePixels(100, height)
+	if err != ErrPartNotFound {
+		t.Errorf("WritePixels(100) error = %v, want ErrPartNotFound", err)
+	}
+
+	// Test WritePixels without setting frame buffer first
+	err = mpo.WritePixels(0, height)
+	if err != ErrInvalidSlice {
+		t.Errorf("WritePixels without frame buffer error = %v, want ErrInvalidSlice", err)
+	}
+}
+
+func TestMultiPartDeepScanlineReaderErrors(t *testing.T) {
+	// Create a regular (non-deep) scanline file
+	width, height := 8, 8
+	h := NewScanlineHeader(width, height)
+	h.Set(&Attribute{Name: AttrNameName, Type: AttrTypeString, Value: "part1"})
+	h.Set(&Attribute{Name: AttrNameType, Type: AttrTypeString, Value: PartTypeScanline})
+
+	var buf bytes.Buffer
+	ws := &seekableWriter{Buffer: &buf}
+
+	mpo, err := NewMultiPartOutputFile(ws, []*Header{h})
+	if err != nil {
+		t.Fatalf("NewMultiPartOutputFile() error = %v", err)
+	}
+
+	fb := NewFrameBuffer()
+	rData := make([]byte, width*height*2)
+	fb.Set("R", NewSlice(PixelTypeHalf, rData, width, height))
+	mpo.SetFrameBuffer(0, fb)
+	mpo.WritePixels(0, height)
+	mpo.Close()
+
+	// Open as multi-part
+	r := bytes.NewReader(buf.Bytes())
+	f, err := OpenReader(r, int64(buf.Len()))
+	if err != nil {
+		t.Fatalf("OpenReader() error = %v", err)
+	}
+
+	mpi := NewMultiPartInputFile(f)
+
+	// Try to get deep scanline reader from non-deep part
+	_, err = mpi.DeepScanlineReader(0)
+	if err != ErrInvalidPartType {
+		t.Errorf("DeepScanlineReader on non-deep part error = %v, want ErrInvalidPartType", err)
+	}
+
+	// Try to get deep scanline reader for invalid part
+	_, err = mpi.DeepScanlineReader(100)
+	if err != ErrPartNotFound {
+		t.Errorf("DeepScanlineReader(100) error = %v, want ErrPartNotFound", err)
+	}
+}
+
+func TestMultiPartDeepTiledReaderErrors(t *testing.T) {
+	// Create a regular (non-deep) tiled file
+	width, height := 8, 8
+	tileW, tileH := 4, 4
+	h := NewTiledHeader(width, height, tileW, tileH)
+	h.Set(&Attribute{Name: AttrNameName, Type: AttrTypeString, Value: "part1"})
+	h.Set(&Attribute{Name: AttrNameType, Type: AttrTypeString, Value: PartTypeTiled})
+
+	var buf bytes.Buffer
+	ws := &seekableWriter{Buffer: &buf}
+
+	mpo, err := NewMultiPartOutputFile(ws, []*Header{h})
+	if err != nil {
+		t.Fatalf("NewMultiPartOutputFile() error = %v", err)
+	}
+
+	fb := NewFrameBuffer()
+	rData := make([]byte, width*height*2)
+	fb.Set("R", NewSlice(PixelTypeHalf, rData, width, height))
+	mpo.SetFrameBuffer(0, fb)
+	mpo.WriteTile(0, 0, 0)
+	mpo.WriteTile(0, 1, 0)
+	mpo.WriteTile(0, 0, 1)
+	mpo.WriteTile(0, 1, 1)
+	mpo.Close()
+
+	// Open as multi-part
+	r := bytes.NewReader(buf.Bytes())
+	f, err := OpenReader(r, int64(buf.Len()))
+	if err != nil {
+		t.Fatalf("OpenReader() error = %v", err)
+	}
+
+	mpi := NewMultiPartInputFile(f)
+
+	// Try to get deep tiled reader from non-deep part
+	_, err = mpi.DeepTiledReader(0)
+	if err != ErrInvalidPartType {
+		t.Errorf("DeepTiledReader on non-deep tiled part error = %v, want ErrInvalidPartType", err)
+	}
+
+	// Try to get deep tiled reader for invalid part
+	_, err = mpi.DeepTiledReader(100)
+	if err != ErrPartNotFound {
+		t.Errorf("DeepTiledReader(100) error = %v, want ErrPartNotFound", err)
+	}
+}
+
+func TestMultiPartOutputHeaderErrors(t *testing.T) {
+	width, height := 8, 8
+
+	h := NewScanlineHeader(width, height)
+	h.Set(&Attribute{Name: AttrNameName, Type: AttrTypeString, Value: "part1"})
+	h.Set(&Attribute{Name: AttrNameType, Type: AttrTypeString, Value: PartTypeScanline})
+
+	var buf bytes.Buffer
+	ws := &seekableWriter{Buffer: &buf}
+
+	mpo, err := NewMultiPartOutputFile(ws, []*Header{h})
+	if err != nil {
+		t.Fatalf("NewMultiPartOutputFile() error = %v", err)
+	}
+	defer mpo.Close()
+
+	// Test invalid part indices for Header
+	if mpo.Header(-1) != nil {
+		t.Error("Header(-1) should return nil")
+	}
+	if mpo.Header(100) != nil {
+		t.Error("Header(100) should return nil")
+	}
+}
+
+func TestMultiPartWriteTileLevelErrors(t *testing.T) {
+	// Create a scanline file (not tiled)
+	width, height := 8, 8
+	h := NewScanlineHeader(width, height)
+	h.Set(&Attribute{Name: AttrNameName, Type: AttrTypeString, Value: "part1"})
+	h.Set(&Attribute{Name: AttrNameType, Type: AttrTypeString, Value: PartTypeScanline})
+
+	var buf bytes.Buffer
+	ws := &seekableWriter{Buffer: &buf}
+
+	mpo, err := NewMultiPartOutputFile(ws, []*Header{h})
+	if err != nil {
+		t.Fatalf("NewMultiPartOutputFile() error = %v", err)
+	}
+	defer mpo.Close()
+
+	// Test invalid part index
+	err = mpo.WriteTileLevel(-1, 0, 0, 0, 0)
+	if err != ErrPartNotFound {
+		t.Errorf("WriteTileLevel(-1) error = %v, want ErrPartNotFound", err)
+	}
+
+	err = mpo.WriteTileLevel(100, 0, 0, 0, 0)
+	if err != ErrPartNotFound {
+		t.Errorf("WriteTileLevel(100) error = %v, want ErrPartNotFound", err)
+	}
+
+	// Set a framebuffer without tile description
+	fb := NewFrameBuffer()
+	rData := make([]byte, width*height*2)
+	fb.Set("R", NewSlice(PixelTypeHalf, rData, width, height))
+	mpo.SetFrameBuffer(0, fb)
+
+	// Try to write tile without tile description - scanline files don't have tiles
+	err = mpo.WriteTileLevel(0, 0, 0, 0, 0)
+	if err == nil {
+		t.Error("WriteTileLevel on scanline part should fail")
+	}
+}

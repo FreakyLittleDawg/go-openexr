@@ -743,3 +743,269 @@ func TestEncodeSmallImage(t *testing.T) {
 		t.Error("Encoded data should not be empty")
 	}
 }
+
+func TestOpenFileMmap(t *testing.T) {
+	// Test with a valid file
+	path := filepath.Join("testdata", "sample.exr")
+	f, err := OpenFileMmap(path)
+	if err != nil {
+		t.Skipf("Test file not available or mmap not supported: %v", err)
+		return
+	}
+	defer f.Close()
+
+	if f == nil {
+		t.Error("OpenFileMmap returned nil")
+	}
+}
+
+func TestOpenFileMmapInvalidPath(t *testing.T) {
+	_, err := OpenFileMmap("/nonexistent/path/file.exr")
+	if err == nil {
+		t.Error("OpenFileMmap with invalid path should return error")
+	}
+}
+
+func TestRGBAInputFileClose(t *testing.T) {
+	// Create a small EXR file in memory
+	width := 16
+	height := 16
+	img := NewRGBAImage(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			img.SetRGBA(x, y, 0.5, 0.5, 0.5, 1.0)
+		}
+	}
+
+	var buf bytes.Buffer
+	ws := &seekableWriter{Buffer: &buf}
+	if err := Encode(ws, img); err != nil {
+		t.Fatalf("Encode error: %v", err)
+	}
+
+	// Open with RGBAInputFile
+	data := buf.Bytes()
+	reader := bytes.NewReader(data)
+	f, err := OpenReader(reader, int64(len(data)))
+	if err != nil {
+		t.Fatalf("OpenReader error: %v", err)
+	}
+
+	rgba, err := NewRGBAInputFile(f)
+	if err != nil {
+		t.Fatalf("NewRGBAInputFile error: %v", err)
+	}
+
+	// Test Close
+	err = rgba.Close()
+	if err != nil {
+		t.Errorf("Close() error: %v", err)
+	}
+}
+
+func TestNewRGBAOutputFileWriteError(t *testing.T) {
+	// NewRGBAOutputFile doesn't actually create the file until WriteRGBA is called
+	// So we test the WriteRGBA error path
+	outFile, err := NewRGBAOutputFile("/nonexistent/directory/file.exr", 10, 10)
+	if err != nil {
+		t.Fatalf("NewRGBAOutputFile error: %v", err)
+	}
+
+	// Try to write - this should fail because the directory doesn't exist
+	img := NewRGBAImage(image.Rect(0, 0, 10, 10))
+	err = outFile.WriteRGBA(img)
+	if err == nil {
+		t.Error("WriteRGBA to invalid path should return error")
+	}
+}
+
+func TestOpenRGBAInputFileReadRGBA(t *testing.T) {
+	path := filepath.Join("testdata", "sample.exr")
+	rgba, err := OpenRGBAInputFile(path)
+	if err != nil {
+		t.Skipf("Test file not available: %v", err)
+		return
+	}
+	defer rgba.Close()
+
+	// Read the image
+	img, err := rgba.ReadRGBA()
+	if err != nil {
+		t.Fatalf("ReadRGBA error: %v", err)
+	}
+
+	if img == nil {
+		t.Error("ReadRGBA returned nil")
+	}
+}
+
+func TestDecodeWithSeeker(t *testing.T) {
+	// Create a small EXR file
+	width := 8
+	height := 8
+	img := NewRGBAImage(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			img.SetRGBA(x, y, 0.5, 0.5, 0.5, 1.0)
+		}
+	}
+
+	var buf bytes.Buffer
+	ws := &seekableWriter{Buffer: &buf}
+	if err := Encode(ws, img); err != nil {
+		t.Fatalf("Encode error: %v", err)
+	}
+
+	// Decode without explicit size - should use Seeker
+	data := buf.Bytes()
+	reader := bytes.NewReader(data)
+	decoded, err := Decode(reader, int64(len(data)))
+	if err != nil {
+		t.Fatalf("Decode error: %v", err)
+	}
+
+	if decoded.Rect.Dx() != width || decoded.Rect.Dy() != height {
+		t.Errorf("Decoded dimensions = (%d,%d), want (%d,%d)",
+			decoded.Rect.Dx(), decoded.Rect.Dy(), width, height)
+	}
+}
+
+// TestRGBAInputFileCloseNil tests closing when file is nil.
+func TestRGBAInputFileCloseNil(t *testing.T) {
+	rgba := &RGBAInputFile{file: nil}
+	err := rgba.Close()
+	if err != nil {
+		t.Errorf("Close on nil file should return nil error, got %v", err)
+	}
+}
+
+// TestOpenFileError tests OpenFile with various error conditions.
+func TestOpenFileError(t *testing.T) {
+	// Non-existent file
+	_, err := OpenFile("/nonexistent/path/to/file.exr")
+	if err == nil {
+		t.Error("OpenFile should error on non-existent file")
+	}
+
+	// Test with directory instead of file
+	_, err = OpenFile(os.TempDir())
+	if err == nil {
+		t.Error("OpenFile should error on directory")
+	}
+}
+
+// TestOpenFileMmapError tests OpenFileMmap with various error conditions.
+func TestOpenFileMmapError(t *testing.T) {
+	// Non-existent file
+	_, err := OpenFileMmap("/nonexistent/path/to/file.exr")
+	if err == nil {
+		t.Error("OpenFileMmap should error on non-existent file")
+	}
+}
+
+// TestOpenRGBAInputFileValidFile tests successful opening.
+func TestOpenRGBAInputFileValidFile(t *testing.T) {
+	// First create a valid file
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "test.exr")
+
+	img := NewRGBAImage(image.Rect(0, 0, 16, 16))
+	for y := 0; y < 16; y++ {
+		for x := 0; x < 16; x++ {
+			img.SetRGBA(x, y, 0.5, 0.5, 0.5, 1.0)
+		}
+	}
+	if err := EncodeFile(path, img); err != nil {
+		t.Fatalf("EncodeFile error: %v", err)
+	}
+
+	// Now open it
+	rgba, err := OpenRGBAInputFile(path)
+	if err != nil {
+		t.Fatalf("OpenRGBAInputFile error: %v", err)
+	}
+	defer rgba.Close()
+
+	// Test all accessor methods
+	if rgba.Header() == nil {
+		t.Error("Header should not be nil")
+	}
+	if rgba.Width() != 16 {
+		t.Errorf("Width = %d, want 16", rgba.Width())
+	}
+	if rgba.Height() != 16 {
+		t.Errorf("Height = %d, want 16", rgba.Height())
+	}
+
+	dw := rgba.DataWindow()
+	if dw.Width() != 16 || dw.Height() != 16 {
+		t.Errorf("DataWindow = %dx%d, want 16x16", dw.Width(), dw.Height())
+	}
+
+	dispW := rgba.DisplayWindow()
+	if dispW.Width() != 16 || dispW.Height() != 16 {
+		t.Errorf("DisplayWindow = %dx%d, want 16x16", dispW.Width(), dispW.Height())
+	}
+
+	// Read the image
+	readImg, err := rgba.ReadRGBA()
+	if err != nil {
+		t.Fatalf("ReadRGBA error: %v", err)
+	}
+
+	if readImg.Rect.Dx() != 16 || readImg.Rect.Dy() != 16 {
+		t.Errorf("Read image dimensions = %dx%d, want 16x16", readImg.Rect.Dx(), readImg.Rect.Dy())
+	}
+}
+
+// TestNewRGBAInputFileInvalidHeader tests creating with invalid header.
+func TestNewRGBAInputFileInvalidHeader(t *testing.T) {
+	// Create a valid EXR file
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "test.exr")
+
+	img := NewRGBAImage(image.Rect(0, 0, 8, 8))
+	if err := EncodeFile(path, img); err != nil {
+		t.Fatalf("EncodeFile error: %v", err)
+	}
+
+	// Open the file
+	f, err := OpenFile(path)
+	if err != nil {
+		t.Fatalf("OpenFile error: %v", err)
+	}
+	defer f.Close()
+
+	// Create RGBAInputFile
+	rgba, err := NewRGBAInputFile(f)
+	if err != nil {
+		t.Fatalf("NewRGBAInputFile error: %v", err)
+	}
+
+	// Verify it's valid
+	if rgba.Header() == nil {
+		t.Error("Header should not be nil")
+	}
+}
+
+// TestRGBAOutputFileClose tests proper closing.
+func TestRGBAOutputFileClose(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "test_close.exr")
+
+	out, err := NewRGBAOutputFile(path, 16, 16)
+	if err != nil {
+		t.Fatalf("NewRGBAOutputFile error: %v", err)
+	}
+
+	img := NewRGBAImage(image.Rect(0, 0, 16, 16))
+	if err := out.WriteRGBA(img); err != nil {
+		t.Fatalf("WriteRGBA error: %v", err)
+	}
+
+	// The file should be closed after WriteRGBA
+	// Verify by checking file exists
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		t.Error("Output file should exist")
+	}
+}

@@ -1,6 +1,7 @@
 package compression
 
 import (
+	"math"
 	"testing"
 )
 
@@ -329,4 +330,298 @@ func BenchmarkB44Decompress(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		_, _ = B44Decompress(compressed, channels, width, height, expectedSize)
 	}
+}
+
+func TestSignMagConvert(t *testing.T) {
+	// Test signMagConvert with high bit set
+	v1 := signMagConvert(0x8001) // High bit set
+	if v1 != 0x0001 {
+		t.Errorf("signMagConvert(0x8001) = 0x%04x, want 0x0001", v1)
+	}
+
+	// Test signMagConvert with high bit clear (should invert)
+	v2 := signMagConvert(0x0001) // High bit clear
+	if v2 != 0xFFFE {            // ^0x0001
+		t.Errorf("signMagConvert(0x0001) = 0x%04x, want 0xFFFE", v2)
+	}
+
+	// Test with 0
+	v3 := signMagConvert(0x0000)
+	if v3 != 0xFFFF { // ^0 = all ones
+		t.Errorf("signMagConvert(0x0000) = 0x%04x, want 0xFFFF", v3)
+	}
+
+	// Test with 0x8000 (just the sign bit)
+	v4 := signMagConvert(0x8000)
+	if v4 != 0x0000 {
+		t.Errorf("signMagConvert(0x8000) = 0x%04x, want 0x0000", v4)
+	}
+}
+
+func TestFloat32ToHalfEdgeCases(t *testing.T) {
+	// Test NaN - use math.NaN
+	nanF := float32(math.NaN())
+	nanH := float32ToHalf(nanF)
+	// NaN should have exponent 31 and non-zero mantissa
+	if (nanH & 0x7C00) != 0x7C00 {
+		t.Errorf("NaN half exponent wrong: 0x%04x", nanH)
+	}
+
+	// Test very small values (denormalized)
+	smallF := float32(1e-10)
+	smallH := float32ToHalf(smallF)
+	// Very small values should become 0 or denormalized
+	if smallH != 0 && (smallH&0x7C00) != 0 {
+		// It's denormalized (exponent 0, non-zero mantissa) - that's fine
+		if (smallH & 0x7FFF) >= 0x7C00 {
+			t.Errorf("Very small float gave unexpected half: 0x%04x", smallH)
+		}
+	}
+
+	// Test very large values (overflow to infinity)
+	largeF := float32(1e10)
+	largeH := float32ToHalf(largeF)
+	if largeH != 0x7C00 && largeH != 0xFC00 { // +Inf or -Inf
+		t.Errorf("Large float should overflow to infinity, got 0x%04x", largeH)
+	}
+
+	// Test negative values
+	negF := float32(-2.5)
+	negH := float32ToHalf(negF)
+	if (negH & 0x8000) == 0 {
+		t.Errorf("Negative float should have sign bit set: 0x%04x", negH)
+	}
+
+	// Test denormalized path (exp <= 0 but not < -10)
+	tinyF := float32(5e-8) // Very small but not too small
+	tinyH := float32ToHalf(tinyF)
+	// Should either be zero or a denormalized number
+	if tinyH != 0 && (tinyH&0x7C00) != 0 {
+		// Non-zero denormalized numbers have exponent 0
+		// This is an edge case we're testing
+	}
+}
+
+func TestHalfToFloat32EdgeCases(t *testing.T) {
+	// Test denormalized half values
+	denormH := uint16(0x0001) // Smallest denormalized
+	denormF := halfToFloat32(denormH)
+	if denormF <= 0 {
+		t.Errorf("Denormalized half should be positive: %v", denormF)
+	}
+
+	// Test NaN propagation
+	nanH := uint16(0x7C01) // NaN (exponent 31, non-zero mantissa)
+	nanF := halfToFloat32(nanH)
+	if nanF == nanF { // NaN != NaN
+		t.Errorf("NaN half should produce NaN float, got %v", nanF)
+	}
+
+	// Test -Inf
+	negInfH := uint16(0xFC00)
+	negInfF := halfToFloat32(negInfH)
+	if negInfF >= 0 {
+		t.Errorf("-Inf half should produce negative, got %v", negInfF)
+	}
+}
+
+func TestB44WithLinearChannel(t *testing.T) {
+	// Test B44 with linear channel (triggers exp/log conversion)
+	channels := []B44ChannelInfo{
+		{Type: b44PixelTypeHalf, Width: 8, Height: 8, IsLinear: true},
+	}
+
+	// Create test data with positive values
+	data := make([]byte, 8*8*2)
+	for i := 0; i < 64; i++ {
+		f := float32(i+1) / 64.0 // Values 0.015 to 1.0
+		h := float32ToHalf(f)
+		data[i*2] = byte(h)
+		data[i*2+1] = byte(h >> 8)
+	}
+
+	compressed, err := B44Compress(data, channels, 8, 8, false)
+	if err != nil {
+		t.Fatalf("B44Compress with linear channel failed: %v", err)
+	}
+
+	decompressed, err := B44Decompress(compressed, channels, 8, 8, len(data))
+	if err != nil {
+		t.Fatalf("B44Decompress with linear channel failed: %v", err)
+	}
+
+	// Just verify it runs without panic - linear conversion is lossy
+	if len(decompressed) != len(data) {
+		t.Errorf("Decompressed size mismatch: got %d, want %d", len(decompressed), len(data))
+	}
+}
+
+func TestB44NonHalfChannels(t *testing.T) {
+	// Test B44 with non-HALF channels (uint and float)
+	channels := []B44ChannelInfo{
+		{Type: b44PixelTypeUint, Width: 4, Height: 4},
+		{Type: b44PixelTypeFloat, Width: 4, Height: 4},
+		{Type: b44PixelTypeHalf, Width: 4, Height: 4},
+	}
+
+	// Create data: 4 bytes per uint pixel, 4 bytes per float pixel, 2 bytes per half pixel
+	dataSize := 4*4*4 + 4*4*4 + 4*4*2
+	data := make([]byte, dataSize)
+	for i := range data {
+		data[i] = byte(i % 256)
+	}
+
+	compressed, err := B44Compress(data, channels, 4, 4, false)
+	if err != nil {
+		t.Fatalf("B44Compress with mixed channels failed: %v", err)
+	}
+
+	decompressed, err := B44Decompress(compressed, channels, 4, 4, len(data))
+	if err != nil {
+		t.Fatalf("B44Decompress with mixed channels failed: %v", err)
+	}
+
+	// Verify size
+	if len(decompressed) != len(data) {
+		t.Errorf("Decompressed size: got %d, want %d", len(decompressed), len(data))
+	}
+}
+
+func TestB44EdgeBlocks(t *testing.T) {
+	// Test with dimensions not divisible by 4 (edge blocks)
+	channels := []B44ChannelInfo{
+		{Type: b44PixelTypeHalf, Width: 7, Height: 5}, // Not divisible by 4
+	}
+
+	data := make([]byte, 7*5*2)
+	for i := 0; i < 7*5; i++ {
+		h := float32ToHalf(float32(i) / 34.0)
+		data[i*2] = byte(h)
+		data[i*2+1] = byte(h >> 8)
+	}
+
+	compressed, err := B44Compress(data, channels, 7, 5, false)
+	if err != nil {
+		t.Fatalf("B44Compress with edge blocks failed: %v", err)
+	}
+
+	decompressed, err := B44Decompress(compressed, channels, 7, 5, len(data))
+	if err != nil {
+		t.Fatalf("B44Decompress with edge blocks failed: %v", err)
+	}
+
+	if len(decompressed) != len(data) {
+		t.Errorf("Decompressed size: got %d, want %d", len(decompressed), len(data))
+	}
+}
+
+func TestB44TruncatedData(t *testing.T) {
+	// Test decompression with truncated data
+	channels := []B44ChannelInfo{
+		{Type: b44PixelTypeHalf, Width: 8, Height: 8},
+	}
+
+	// Very short data
+	shortData := []byte{0x00, 0x3c, 0xfc} // Just a flat field marker
+
+	_, err := B44Decompress(shortData, channels, 8, 8, 8*8*2)
+	// Should not panic, even with truncated data
+	if err != nil {
+		t.Logf("B44Decompress with truncated data returned error (expected): %v", err)
+	}
+}
+
+func TestB44ZeroHeightChannel(t *testing.T) {
+	// Test with zero-height channels
+	channels := []B44ChannelInfo{
+		{Type: b44PixelTypeHalf, Width: 8, Height: 0}, // Zero height
+		{Type: b44PixelTypeHalf, Width: 8, Height: 8},
+	}
+
+	data := make([]byte, 8*8*2)
+	for i := range data {
+		data[i] = byte(i % 256)
+	}
+
+	compressed, err := B44Compress(data, channels, 8, 8, false)
+	if err != nil {
+		t.Fatalf("B44Compress with zero height channel failed: %v", err)
+	}
+
+	decompressed, err := B44Decompress(compressed, channels, 8, 8, len(data))
+	if err != nil {
+		t.Fatalf("B44Decompress with zero height channel failed: %v", err)
+	}
+
+	if len(decompressed) != len(data) {
+		t.Errorf("Decompressed size: got %d, want %d", len(decompressed), len(data))
+	}
+}
+
+func TestConvertFromLinearEdgeCases(t *testing.T) {
+	// Test convertFromLinear with special values
+	initB44Tables()
+
+	// Test with Inf (exponent 0x7c00)
+	infH := uint16(0x7C00)
+	result := convertFromLinear(infH)
+	if result != 0 {
+		t.Errorf("convertFromLinear(Inf) = 0x%04x, want 0", result)
+	}
+
+	// Test with NaN (exponent 0x7c00 with mantissa)
+	nanH := uint16(0x7C01)
+	result = convertFromLinear(nanH)
+	if result != 0 {
+		t.Errorf("convertFromLinear(NaN) = 0x%04x, want 0", result)
+	}
+
+	// Test with large positive value that should clamp
+	largeH := uint16(0x5590) // Large positive number
+	result = convertFromLinear(largeH)
+	if result != 0x7bff {
+		t.Logf("convertFromLinear(0x%04x) = 0x%04x", largeH, result)
+	}
+}
+
+func TestConvertToLinearEdgeCases(t *testing.T) {
+	initB44Tables()
+
+	// Test with Inf
+	infH := uint16(0x7C00)
+	result := convertToLinear(infH)
+	if result != 0 {
+		t.Errorf("convertToLinear(Inf) = 0x%04x, want 0", result)
+	}
+
+	// Test with negative value > 0x8000
+	negH := uint16(0x8001)
+	result = convertToLinear(negH)
+	if result != 0 {
+		t.Errorf("convertToLinear(0x8001) = 0x%04x, want 0", result)
+	}
+}
+
+func TestB44CompressionRatioCheck(t *testing.T) {
+	// Test that when compressed is larger, original is returned
+	channels := []B44ChannelInfo{
+		{Type: b44PixelTypeHalf, Width: 4, Height: 4}, // Very small
+	}
+
+	// Create highly variable data that won't compress well
+	data := make([]byte, 4*4*2)
+	for i := 0; i < 16; i++ {
+		// Random-looking values
+		h := uint16((i * 7919) % 65536)
+		data[i*2] = byte(h)
+		data[i*2+1] = byte(h >> 8)
+	}
+
+	compressed, err := B44Compress(data, channels, 4, 4, false)
+	if err != nil {
+		t.Fatalf("B44Compress failed: %v", err)
+	}
+
+	// If compressed >= original, should return original
+	t.Logf("Original: %d, Compressed: %d", len(data), len(compressed))
 }

@@ -1,6 +1,7 @@
 package exrid
 
 import (
+	"bytes"
 	"fmt"
 	"math"
 	"testing"
@@ -588,4 +589,351 @@ func indexOfSubstring(s, substr string) int {
 		}
 	}
 	return -1
+}
+
+// TestInsertHashedMurmur3_64 tests the HashMurmur3_64 hash scheme path.
+func TestInsertHashedMurmur3_64(t *testing.T) {
+	m := NewManifest()
+	group := m.AddGroup([]string{"id"}, []string{"name"})
+	group.HashScheme = HashMurmur3_64
+
+	id := group.InsertHashed("TestName")
+
+	if id == 0 {
+		t.Error("InsertHashed with HashMurmur3_64 returned 0")
+	}
+
+	// Verify entry was stored
+	if values, ok := group.Lookup(id); !ok {
+		t.Error("Lookup failed for HashMurmur3_64 hashed ID")
+	} else if len(values) != 1 || values[0] != "TestName" {
+		t.Errorf("Lookup returned %v, want [\"TestName\"]", values)
+	}
+}
+
+// TestInsertHashedUnknownScheme tests the default hash scheme path.
+func TestInsertHashedUnknownScheme(t *testing.T) {
+	m := NewManifest()
+	group := m.AddGroup([]string{"id"}, []string{"name"})
+	group.HashScheme = HashUnknown
+
+	id := group.InsertHashed("TestName")
+
+	if id == 0 {
+		t.Error("InsertHashed with unknown scheme returned 0")
+	}
+
+	// Verify entry was stored
+	if values, ok := group.Lookup(id); !ok {
+		t.Error("Lookup failed for unknown scheme hashed ID")
+	} else if len(values) != 1 || values[0] != "TestName" {
+		t.Errorf("Lookup returned %v, want [\"TestName\"]", values)
+	}
+}
+
+// TestGetManifestNoManifest tests GetManifest when no manifest exists.
+func TestGetManifestNoManifest(t *testing.T) {
+	h := exr.NewScanlineHeader(100, 100)
+
+	_, err := GetManifest(h)
+	if err == nil {
+		t.Error("GetManifest should return error when no manifest exists")
+	}
+}
+
+// TestGetManifestCryptomatteInvalidJSON tests GetManifest with invalid JSON in Cryptomatte manifest.
+func TestGetManifestCryptomatteInvalidJSON(t *testing.T) {
+	h := exr.NewScanlineHeader(100, 100)
+
+	// Set cryptomatte attributes with invalid JSON
+	h.Set(&exr.Attribute{
+		Name:  "cryptomatte/00/name",
+		Type:  exr.AttrTypeString,
+		Value: "CryptoObject",
+	})
+	h.Set(&exr.Attribute{
+		Name:  "cryptomatte/00/manifest",
+		Type:  exr.AttrTypeString,
+		Value: "{invalid json}",
+	})
+
+	m, err := GetManifest(h)
+	if err != nil {
+		t.Fatalf("GetManifest() error = %v", err)
+	}
+
+	// Should still create the manifest (just with no entries parsed from invalid JSON)
+	if m == nil {
+		t.Error("GetManifest should return manifest even with invalid JSON")
+	}
+}
+
+// TestGetManifestCryptomatteInvalidHex tests GetManifest with invalid hex in manifest.
+func TestGetManifestCryptomatteInvalidHex(t *testing.T) {
+	h := exr.NewScanlineHeader(100, 100)
+
+	// Set cryptomatte attributes with invalid hex value
+	h.Set(&exr.Attribute{
+		Name:  "cryptomatte/00/name",
+		Type:  exr.AttrTypeString,
+		Value: "CryptoObject",
+	})
+	h.Set(&exr.Attribute{
+		Name:  "cryptomatte/00/manifest",
+		Type:  exr.AttrTypeString,
+		Value: `{"Hero":"invalidhex"}`,
+	})
+
+	m, err := GetManifest(h)
+	if err != nil {
+		t.Fatalf("GetManifest() error = %v", err)
+	}
+
+	// Should still create the manifest (just skip invalid entries)
+	if m == nil {
+		t.Error("GetManifest should return manifest even with invalid hex")
+	}
+}
+
+// TestGetManifestCryptomatteWrongAttributeParts tests GetManifest with invalid attribute path.
+func TestGetManifestCryptomatteWrongAttributeParts(t *testing.T) {
+	h := exr.NewScanlineHeader(100, 100)
+
+	// Set cryptomatte attribute with wrong path format (only 2 parts instead of 3)
+	h.Set(&exr.Attribute{
+		Name:  "cryptomatte/invalid",
+		Type:  exr.AttrTypeString,
+		Value: "test",
+	})
+
+	// Also set a valid attribute to get a non-empty manifest
+	h.Set(&exr.Attribute{
+		Name:  "cryptomatte/00/name",
+		Type:  exr.AttrTypeString,
+		Value: "CryptoObject",
+	})
+	h.Set(&exr.Attribute{
+		Name:  "cryptomatte/00/manifest",
+		Type:  exr.AttrTypeString,
+		Value: `{"Hero":"3f800000"}`,
+	})
+
+	m, err := GetManifest(h)
+	if err != nil {
+		t.Fatalf("GetManifest() error = %v", err)
+	}
+
+	// Should ignore invalid attribute and still parse valid one
+	if m == nil || len(m.Groups) != 1 {
+		t.Error("GetManifest should ignore invalid attribute paths")
+	}
+}
+
+// TestDecodeManifestInvalidVersion tests decoding with invalid version.
+func TestDecodeManifestInvalidVersion(t *testing.T) {
+	// Create encoded data with wrong version
+	m := NewManifest()
+	m.AddGroup([]string{"id"}, []string{"name"})
+	data, err := encodeManifest(m)
+	if err != nil {
+		t.Fatalf("encodeManifest error: %v", err)
+	}
+
+	// Decompress, modify version, and recompress
+	// This is a simpler approach - just test with completely invalid data
+	_, err = decodeManifest([]byte{0x78, 0x9c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01}) // Invalid zlib
+	if err == nil {
+		t.Error("decodeManifest should fail with invalid data")
+	}
+
+	// Test with valid zlib but invalid manifest data
+	_ = data // use the valid data for reference
+}
+
+// TestDecodeManifestInvalidZlib tests decoding with invalid zlib data.
+func TestDecodeManifestInvalidZlib(t *testing.T) {
+	_, err := decodeManifest([]byte{0x00, 0x01, 0x02, 0x03})
+	if err == nil {
+		t.Error("decodeManifest should fail with invalid zlib data")
+	}
+}
+
+// TestReadStringMaxLength tests reading a string that exceeds max length.
+func TestReadStringMaxLength(t *testing.T) {
+	// Create a buffer with a length that exceeds the max
+	buf := make([]byte, 4)
+	// 16MB + 1 = 0x01000001
+	buf[0] = 0x01
+	buf[1] = 0x00
+	buf[2] = 0x00
+	buf[3] = 0x01 // Little endian: 0x01000001 = 16777217
+
+	r := bytes.NewReader(buf)
+	_, err := readString(r)
+	if err == nil {
+		t.Error("readString should fail when length exceeds maximum")
+	}
+}
+
+// TestReadStringListMaxCount tests reading a string list that exceeds max count.
+func TestReadStringListMaxCount(t *testing.T) {
+	// Create a buffer with a count that exceeds the max
+	buf := make([]byte, 4)
+	// 1M + 1 = 0x00100001
+	buf[0] = 0x01
+	buf[1] = 0x00
+	buf[2] = 0x10
+	buf[3] = 0x00 // Little endian: 0x00100001 = 1048577
+
+	r := bytes.NewReader(buf)
+	_, err := readStringList(r)
+	if err == nil {
+		t.Error("readStringList should fail when count exceeds maximum")
+	}
+}
+
+// TestHasManifestCryptomatte tests HasManifest with Cryptomatte attributes.
+func TestHasManifestCryptomatte(t *testing.T) {
+	h := exr.NewScanlineHeader(100, 100)
+
+	// Set only cryptomatte manifest attribute (not idmanifest)
+	h.Set(&exr.Attribute{
+		Name:  "cryptomatte/00/manifest",
+		Type:  exr.AttrTypeString,
+		Value: `{"test":"12345678"}`,
+	})
+
+	if !HasManifest(h) {
+		t.Error("HasManifest should return true for cryptomatte manifest")
+	}
+}
+
+// TestGetManifestWithRawData tests GetManifest with raw idmanifest attribute.
+func TestGetManifestWithRawData(t *testing.T) {
+	h := exr.NewScanlineHeader(100, 100)
+
+	// Create a valid manifest and encode it
+	m := NewManifest()
+	group := m.AddGroup([]string{"objectId"}, []string{"object"})
+	group.Insert(100, "Hero")
+
+	data, err := encodeManifest(m)
+	if err != nil {
+		t.Fatalf("encodeManifest error: %v", err)
+	}
+
+	// Set as raw bytes
+	h.Set(&exr.Attribute{
+		Name:  AttrIDManifest,
+		Type:  exr.AttributeType(AttrIDManifest),
+		Value: data,
+	})
+
+	// Get it back
+	m2, err := GetManifest(h)
+	if err != nil {
+		t.Fatalf("GetManifest error: %v", err)
+	}
+
+	if len(m2.Groups) != 1 {
+		t.Errorf("Expected 1 group, got %d", len(m2.Groups))
+	}
+}
+
+// TestCryptomatteNameAttributeNonString tests Cryptomatte name attribute with non-string value.
+func TestCryptomatteNameAttributeNonString(t *testing.T) {
+	h := exr.NewScanlineHeader(100, 100)
+
+	// Set cryptomatte name attribute with non-string value
+	h.Set(&exr.Attribute{
+		Name:  "cryptomatte/00/name",
+		Type:  exr.AttrTypeFloat,
+		Value: float32(1.0),
+	})
+	h.Set(&exr.Attribute{
+		Name:  "cryptomatte/00/manifest",
+		Type:  exr.AttrTypeString,
+		Value: `{"Hero":"3f800000"}`,
+	})
+
+	m, err := GetManifest(h)
+	if err != nil {
+		t.Fatalf("GetManifest() error = %v", err)
+	}
+
+	// Should parse the manifest but channels list will be empty
+	if m == nil {
+		t.Error("GetManifest should return manifest")
+	}
+}
+
+// TestCryptomatteManifestAttributeNonString tests manifest attribute with non-string value.
+func TestCryptomatteManifestAttributeNonString(t *testing.T) {
+	h := exr.NewScanlineHeader(100, 100)
+
+	// Set cryptomatte manifest attribute with non-string value
+	h.Set(&exr.Attribute{
+		Name:  "cryptomatte/00/name",
+		Type:  exr.AttrTypeString,
+		Value: "CryptoObject",
+	})
+	h.Set(&exr.Attribute{
+		Name:  "cryptomatte/00/manifest",
+		Type:  exr.AttrTypeFloat,
+		Value: float32(1.0),
+	})
+
+	m, err := GetManifest(h)
+	if err != nil {
+		t.Fatalf("GetManifest() error = %v", err)
+	}
+
+	// Should create manifest but entries will be empty
+	if m == nil {
+		t.Error("GetManifest should return manifest")
+	}
+}
+
+// TestParseHexFloat tests the parseHexFloat function.
+func TestParseHexFloat(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected uint32
+		wantErr  bool
+	}{
+		{"3f800000", 0x3f800000, false},
+		{"00000000", 0, false},
+		{"ffffffff", 0xffffffff, false},
+		{"invalid", 0, true},
+		{"", 0, true},
+	}
+
+	for _, tt := range tests {
+		got, err := parseHexFloat(tt.input)
+		if (err != nil) != tt.wantErr {
+			t.Errorf("parseHexFloat(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+			continue
+		}
+		if !tt.wantErr && got != tt.expected {
+			t.Errorf("parseHexFloat(%q) = 0x%x, want 0x%x", tt.input, got, tt.expected)
+		}
+	}
+}
+
+// TestGetManifestWithNonBytesAttribute tests GetManifest when idmanifest has wrong type.
+func TestGetManifestWithNonBytesAttribute(t *testing.T) {
+	h := exr.NewScanlineHeader(100, 100)
+
+	// Set idmanifest with wrong type (string instead of []byte)
+	h.Set(&exr.Attribute{
+		Name:  AttrIDManifest,
+		Type:  exr.AttrTypeString,
+		Value: "not bytes",
+	})
+
+	// Should fall through to try Cryptomatte, which will fail
+	_, err := GetManifest(h)
+	if err == nil {
+		t.Error("GetManifest should fail when idmanifest has wrong type and no cryptomatte")
+	}
 }

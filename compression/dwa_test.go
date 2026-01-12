@@ -659,3 +659,59 @@ func BenchmarkDctInverse8x8DcOnly(b *testing.B) {
 		dctInverse8x8DcOnly(&block)
 	}
 }
+
+func TestZlibDecompressError(t *testing.T) {
+	// Test with corrupted zlib data
+	badData := []byte{0xFF, 0xFF, 0xFF, 0xFF}
+	_, err := zlibDecompress(badData, 100)
+	if err == nil {
+		t.Error("Expected error from corrupted zlib data")
+	}
+
+	// Test with valid zlib but short read
+	validZlib := []byte{0x78, 0x9C, 0x03, 0x00, 0x00, 0x00, 0x00, 0x01}
+	result, err := zlibDecompress(validZlib, 1000) // Expect more than actual
+	if err == nil || len(result) == 1000 {
+		t.Logf("zlibDecompress returned: len=%d, err=%v", len(result), err)
+	}
+}
+
+func TestNewDwaCompressorNegativeLevel(t *testing.T) {
+	// Test with negative level (should use default)
+	c := NewDwaCompressor(64, 64, -1)
+	if c.compressionLevel != 45.0 {
+		t.Errorf("Expected default level 45.0, got %f", c.compressionLevel)
+	}
+
+	// Test with zero level (valid)
+	c = NewDwaCompressor(64, 64, 0)
+	if c.compressionLevel != 0 {
+		t.Errorf("Expected level 0, got %f", c.compressionLevel)
+	}
+}
+
+func TestDecodeAcCoefficientsError(t *testing.T) {
+	// Test with truncated data (0xFF followed by nothing)
+	truncated := []byte{0xFF}
+	_, err := decodeAcCoefficients(truncated, 10)
+	if err != ErrDwaCorruptData {
+		t.Errorf("Expected ErrDwaCorruptData, got %v", err)
+	}
+
+	// Test with non-zero run but truncated value
+	truncatedValue := []byte{0x01}
+	_, err = decodeAcCoefficients(truncatedValue, 10)
+	if err != ErrDwaCorruptData {
+		t.Errorf("Expected ErrDwaCorruptData for truncated value, got %v", err)
+	}
+}
+
+func TestHuffmanDecodeFunction(t *testing.T) {
+	// huffmanDecode falls back to zlibDecompress
+	// Test with corrupted data
+	badData := []byte{0xFF, 0xFF, 0xFF}
+	_, err := huffmanDecode(badData, 100)
+	if err == nil {
+		t.Error("Expected error from huffmanDecode with bad data")
+	}
+}

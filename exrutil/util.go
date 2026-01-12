@@ -170,8 +170,17 @@ func ExtractChannels(f *exr.File, channelNames ...string) (map[string][]float32,
 	return result, nil
 }
 
+// readPixelsFunc is the function used to read pixels. It can be overridden in tests
+// to simulate errors for coverage testing.
+var readPixelsFunc = readPixelsImpl
+
 // readPixels reads pixels using the appropriate reader type.
 func readPixels(f *exr.File, fb *exr.FrameBuffer) error {
+	return readPixelsFunc(f, fb)
+}
+
+// readPixelsImpl is the actual implementation of readPixels.
+func readPixelsImpl(f *exr.File, fb *exr.FrameBuffer) error {
 	h := f.Header(0)
 
 	if h.IsTiled() {

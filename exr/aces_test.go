@@ -701,3 +701,300 @@ func BenchmarkColorConversion(b *testing.B) {
 		_ = conversionMatrix[8]*r + conversionMatrix[9]*g + conversionMatrix[10]*bl
 	}
 }
+
+// TestAcesInputFileMethods tests additional AcesInputFile methods.
+func TestAcesInputFileMethods(t *testing.T) {
+	width := 16
+	height := 16
+
+	// Create an ACES file
+	buf := &bytes.Buffer{}
+	ws := &acesWriteSeeker{buf: buf}
+
+	opts := &AcesOutputOptions{Compression: CompressionNone}
+	af, err := NewAcesOutputFile(ws, width, height, opts)
+	if err != nil {
+		t.Fatalf("Failed to create ACES output file: %v", err)
+	}
+
+	rgbaFB := NewRGBAFrameBuffer(width, height, false)
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			rgbaFB.SetPixel(x, y, 0.5, 0.5, 0.5, 1.0)
+		}
+	}
+
+	af.SetFrameBuffer(rgbaFB.ToFrameBuffer())
+	if err := af.WritePixels(0, height-1); err != nil {
+		t.Fatalf("Failed to write pixels: %v", err)
+	}
+	if err := af.Close(); err != nil {
+		t.Fatalf("Failed to close: %v", err)
+	}
+
+	// Read back and test methods
+	data := buf.Bytes()
+	reader := bytes.NewReader(data)
+
+	acesInput, err := OpenAcesInputFile(reader, int64(len(data)))
+	if err != nil {
+		t.Fatalf("Failed to open ACES input: %v", err)
+	}
+
+	// Test DataWindow
+	dw := acesInput.DataWindow()
+	if dw.Width() != int32(width) || dw.Height() != int32(height) {
+		t.Errorf("DataWindow = %dx%d, want %dx%d", dw.Width(), dw.Height(), width, height)
+	}
+
+	// Test DisplayWindow
+	dispW := acesInput.DisplayWindow()
+	if dispW.Width() != int32(width) || dispW.Height() != int32(height) {
+		t.Errorf("DisplayWindow = %dx%d, want %dx%d", dispW.Width(), dispW.Height(), width, height)
+	}
+
+	// Test IsTiled
+	if acesInput.IsTiled() {
+		t.Error("Scanline file should not be tiled")
+	}
+}
+
+// TestAcesOutputFileMethods tests additional AcesOutputFile methods.
+func TestAcesOutputFileMethods(t *testing.T) {
+	width := 16
+	height := 16
+
+	buf := &bytes.Buffer{}
+	ws := &acesWriteSeeker{buf: buf}
+
+	opts := &AcesOutputOptions{Compression: CompressionNone}
+	af, err := NewAcesOutputFile(ws, width, height, opts)
+	if err != nil {
+		t.Fatalf("Failed to create ACES output file: %v", err)
+	}
+
+	// Test Header
+	h := af.Header()
+	if h == nil {
+		t.Error("Header should not be nil")
+	}
+
+	// Test DataWindow
+	dw := af.DataWindow()
+	if dw.Width() != int32(width) || dw.Height() != int32(height) {
+		t.Errorf("DataWindow = %dx%d, want %dx%d", dw.Width(), dw.Height(), width, height)
+	}
+
+	// Test WritePixels without frame buffer
+	err = af.WritePixels(0, height-1)
+	if err != ErrACESNoFrameBuffer {
+		t.Errorf("WritePixels without framebuffer should return ErrACESNoFrameBuffer, got %v", err)
+	}
+
+	af.Close()
+}
+
+// TestAcesInputFileReadPixelsWithoutFrameBuffer tests error handling.
+func TestAcesInputFileReadPixelsWithoutFrameBuffer(t *testing.T) {
+	width := 16
+	height := 16
+
+	// Create an ACES file
+	buf := &bytes.Buffer{}
+	ws := &acesWriteSeeker{buf: buf}
+
+	opts := &AcesOutputOptions{Compression: CompressionNone}
+	af, err := NewAcesOutputFile(ws, width, height, opts)
+	if err != nil {
+		t.Fatalf("Failed to create ACES output file: %v", err)
+	}
+
+	rgbaFB := NewRGBAFrameBuffer(width, height, false)
+	af.SetFrameBuffer(rgbaFB.ToFrameBuffer())
+	af.WritePixels(0, height-1)
+	af.Close()
+
+	// Read back
+	data := buf.Bytes()
+	reader := bytes.NewReader(data)
+
+	acesInput, err := OpenAcesInputFile(reader, int64(len(data)))
+	if err != nil {
+		t.Fatalf("Failed to open ACES input: %v", err)
+	}
+
+	// Try to read without setting frame buffer
+	err = acesInput.ReadPixels(0, height-1)
+	if err != ErrACESNoFrameBuffer {
+		t.Errorf("ReadPixels without framebuffer should return ErrACESNoFrameBuffer, got %v", err)
+	}
+}
+
+// TestAcesOutputFileFromHeaderWithTiles tests that tiled headers are rejected.
+func TestAcesOutputFileFromHeaderWithTiles(t *testing.T) {
+	buf := &bytes.Buffer{}
+	ws := &acesWriteSeeker{buf: buf}
+
+	// Create a tiled header
+	h := NewTiledHeader(64, 64, 32, 32)
+	cl := NewChannelList()
+	cl.Add(NewChannel("R", PixelTypeHalf))
+	cl.Add(NewChannel("G", PixelTypeHalf))
+	cl.Add(NewChannel("B", PixelTypeHalf))
+	h.SetChannels(cl)
+	h.SetCompression(CompressionPIZ)
+
+	_, err := NewAcesOutputFileFromHeader(ws, h)
+	if err != ErrACESTiledNotAllowed {
+		t.Errorf("Expected ErrACESTiledNotAllowed, got %v", err)
+	}
+}
+
+// TestValidateACESChannelsNil tests nil channel list validation.
+func TestValidateACESChannelsNil(t *testing.T) {
+	err := ValidateACESChannels(nil)
+	if err != ErrInvalidACESChannels {
+		t.Errorf("Expected ErrInvalidACESChannels for nil, got %v", err)
+	}
+}
+
+// TestGetAdoptedNeutralDefault tests default adopted neutral.
+func TestGetAdoptedNeutralDefault(t *testing.T) {
+	h := NewHeader()
+
+	// Without any chromaticities, should return default white point
+	neutral := GetAdoptedNeutral(h)
+	expected := DefaultChromaticities()
+	if !v2fEqual(neutral, V2f{X: expected.WhiteX, Y: expected.WhiteY}) {
+		t.Errorf("Default adopted neutral = %v, want %v", neutral, V2f{X: expected.WhiteX, Y: expected.WhiteY})
+	}
+}
+
+// TestAcesInputFileTiled tests reading a tiled EXR as ACES.
+func TestAcesInputFileTiled(t *testing.T) {
+	width := 64
+	height := 64
+	tileSize := 32
+
+	// Create a tiled EXR file
+	h := NewTiledHeader(width, height, tileSize, tileSize)
+	h.SetCompression(CompressionNone)
+
+	// Set ACES chromaticities to avoid color conversion
+	acesChr := ACESChromaticities()
+	h.Set(&Attribute{Name: "chromaticities", Type: AttrTypeChromaticities, Value: acesChr})
+
+	buf := &bytes.Buffer{}
+	ws := &acesWriteSeeker{buf: buf}
+
+	tw, err := NewTiledWriter(ws, h)
+	if err != nil {
+		t.Fatalf("NewTiledWriter error: %v", err)
+	}
+
+	fb, _ := AllocateChannels(h.Channels(), h.DataWindow())
+	tw.SetFrameBuffer(fb)
+
+	// Write tiles
+	numTilesX := (width + tileSize - 1) / tileSize
+	numTilesY := (height + tileSize - 1) / tileSize
+	for ty := 0; ty < numTilesY; ty++ {
+		for tx := 0; tx < numTilesX; tx++ {
+			tw.WriteTile(tx, ty)
+		}
+	}
+	tw.Close()
+
+	// Read as ACES
+	data := buf.Bytes()
+	reader := bytes.NewReader(data)
+
+	acesInput, err := OpenAcesInputFile(reader, int64(len(data)))
+	if err != nil {
+		t.Fatalf("OpenAcesInputFile error: %v", err)
+	}
+
+	// Verify it's tiled
+	if !acesInput.IsTiled() {
+		t.Error("File should be tiled")
+	}
+
+	// Set frame buffer and read
+	readFB, _ := AllocateChannels(acesInput.Header().Channels(), acesInput.DataWindow())
+	acesInput.SetFrameBuffer(readFB)
+
+	// Read pixels
+	if err := acesInput.ReadPixels(0, height-1); err != nil {
+		t.Fatalf("ReadPixels error: %v", err)
+	}
+
+	t.Log("ACES tiled input file read successfully")
+}
+
+// TestAcesInputFileWithColorConversion tests ACES input with color conversion.
+func TestAcesInputFileWithColorConversion(t *testing.T) {
+	width := 32
+	height := 32
+
+	// Create a scanline EXR with non-ACES chromaticities
+	buf := &bytes.Buffer{}
+	ws := &acesWriteSeeker{buf: buf}
+
+	h := NewScanlineHeader(width, height)
+	h.SetCompression(CompressionNone)
+
+	// Set Rec.709 chromaticities (not ACES) to force conversion
+	rec709 := DefaultChromaticities()
+	h.Set(&Attribute{Name: "chromaticities", Type: AttrTypeChromaticities, Value: rec709})
+
+	sw, err := NewScanlineWriter(ws, h)
+	if err != nil {
+		t.Fatalf("NewScanlineWriter error: %v", err)
+	}
+
+	fb, _ := AllocateChannels(h.Channels(), h.DataWindow())
+
+	// Write colorful data
+	rSlice := fb.Get("R")
+	gSlice := fb.Get("G")
+	bSlice := fb.Get("B")
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			rSlice.SetFloat32(x, y, float32(x)/float32(width))
+			gSlice.SetFloat32(x, y, float32(y)/float32(height))
+			bSlice.SetFloat32(x, y, 0.5)
+		}
+	}
+	sw.SetFrameBuffer(fb)
+	sw.WritePixels(0, height-1)
+	sw.Close()
+
+	// Read as ACES - should convert colors
+	data := buf.Bytes()
+	reader := bytes.NewReader(data)
+
+	acesInput, err := OpenAcesInputFile(reader, int64(len(data)))
+	if err != nil {
+		t.Fatalf("OpenAcesInputFile error: %v", err)
+	}
+
+	// Check if conversion is needed
+	if !acesInput.NeedsColorConversion() {
+		t.Log("Color conversion not needed (may be due to similar white point)")
+	}
+
+	// Set frame buffer and read
+	readFB, _ := AllocateChannels(acesInput.Header().Channels(), acesInput.DataWindow())
+	acesInput.SetFrameBuffer(readFB)
+
+	if err := acesInput.ReadPixels(0, height-1); err != nil {
+		t.Fatalf("ReadPixels error: %v", err)
+	}
+
+	// Verify some pixels were converted
+	rRead := readFB.Get("R")
+	if rRead != nil {
+		val := rRead.GetFloat32(15, 15)
+		t.Logf("Center R value after conversion: %v", val)
+	}
+}

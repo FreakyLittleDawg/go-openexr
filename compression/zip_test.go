@@ -253,3 +253,396 @@ func BenchmarkDeinterleave(b *testing.B) {
 		Deinterleave(data)
 	}
 }
+
+// TestZIPCompressLevel tests compression at different levels
+func TestZIPCompressLevel(t *testing.T) {
+	data := make([]byte, 1024)
+	for i := range data {
+		data[i] = byte(i % 256)
+	}
+
+	levels := []CompressionLevel{
+		CompressionLevelHuffmanOnly,
+		CompressionLevelDefault,
+		CompressionLevelNone,
+		CompressionLevelBestSpeed,
+		CompressionLevelBestSize,
+	}
+
+	for _, level := range levels {
+		t.Run("", func(t *testing.T) {
+			compressed, err := ZIPCompressLevel(data, level)
+			if err != nil {
+				t.Fatalf("ZIPCompressLevel(%d) error: %v", level, err)
+			}
+
+			// Decompress and verify
+			decompressed, err := ZIPDecompress(compressed, len(data))
+			if err != nil {
+				t.Fatalf("ZIPDecompress error: %v", err)
+			}
+
+			if !bytes.Equal(decompressed, data) {
+				t.Errorf("Round-trip failed for level %d", level)
+			}
+		})
+	}
+}
+
+// TestZIPCompressLevelEmpty tests empty input
+func TestZIPCompressLevelEmpty(t *testing.T) {
+	result, err := ZIPCompressLevel(nil, CompressionLevelDefault)
+	if err != nil || result != nil {
+		t.Error("Empty compress should return nil, nil")
+	}
+
+	result, err = ZIPCompressLevel([]byte{}, CompressionLevelBestSpeed)
+	if err != nil || result != nil {
+		t.Error("Empty compress should return nil, nil")
+	}
+}
+
+// TestZIPDecompressTo tests decompression into pre-allocated buffer
+func TestZIPDecompressToBasic(t *testing.T) {
+	tests := [][]byte{
+		{1},
+		{1, 2, 3, 4, 5},
+		{100, 100, 100, 100, 100, 100, 100, 100},
+	}
+
+	for i, original := range tests {
+		compressed, err := ZIPCompress(original)
+		if err != nil {
+			t.Errorf("test %d: compress error: %v", i, err)
+			continue
+		}
+
+		dst := make([]byte, len(original))
+		err = ZIPDecompressTo(dst, compressed)
+		if err != nil {
+			t.Errorf("test %d: ZIPDecompressTo error: %v", i, err)
+			continue
+		}
+
+		if !bytes.Equal(dst, original) {
+			t.Errorf("test %d: ZIPDecompressTo mismatch", i)
+		}
+	}
+}
+
+// TestZIPDecompressToEmpty tests empty input
+func TestZIPDecompressToEmpty(t *testing.T) {
+	// Empty src and dst should succeed
+	err := ZIPDecompressTo(nil, nil)
+	if err != nil {
+		t.Errorf("ZIPDecompressTo(nil, nil) error: %v", err)
+	}
+
+	err = ZIPDecompressTo([]byte{}, []byte{})
+	if err != nil {
+		t.Errorf("ZIPDecompressTo(empty, empty) error: %v", err)
+	}
+
+	// Empty src with non-empty dst should error
+	dst := make([]byte, 10)
+	err = ZIPDecompressTo(dst, nil)
+	if err != ErrZIPCorrupted {
+		t.Errorf("Expected ErrZIPCorrupted, got %v", err)
+	}
+
+	err = ZIPDecompressTo(dst, []byte{})
+	if err != ErrZIPCorrupted {
+		t.Errorf("Expected ErrZIPCorrupted for empty src, got %v", err)
+	}
+}
+
+// TestZIPDecompressToErrors tests error handling
+func TestZIPDecompressToErrors(t *testing.T) {
+	// Corrupted zlib data
+	dst := make([]byte, 10)
+	err := ZIPDecompressTo(dst, []byte{0x78, 0x9c, 0xFF, 0xFF})
+	if err == nil {
+		t.Error("Expected error for corrupted data")
+	}
+
+	// Invalid zlib header
+	err = ZIPDecompressTo(dst, []byte{0x00, 0x00, 0x00, 0x00})
+	if err != ErrZIPCorrupted {
+		t.Errorf("Expected ErrZIPCorrupted for invalid header, got %v", err)
+	}
+}
+
+// TestDetectZlibFLevelErrors tests error cases
+func TestDetectZlibFLevelErrors(t *testing.T) {
+	// Too short
+	_, ok := DetectZlibFLevel(nil)
+	if ok {
+		t.Error("Expected false for nil input")
+	}
+
+	_, ok = DetectZlibFLevel([]byte{0x78})
+	if ok {
+		t.Error("Expected false for 1-byte input")
+	}
+
+	// Invalid compression method
+	_, ok = DetectZlibFLevel([]byte{0x00, 0x00})
+	if ok {
+		t.Error("Expected false for invalid compression method")
+	}
+
+	// Invalid header checksum
+	_, ok = DetectZlibFLevel([]byte{0x78, 0x00})
+	if ok {
+		t.Error("Expected false for invalid checksum")
+	}
+}
+
+// TestFLevelToLevelUnknown tests FLevel to CompressionLevel conversion for unknown values
+func TestFLevelToLevelUnknown(t *testing.T) {
+	// Unknown level should default
+	got := FLevelToLevel(FLevel(100))
+	if got != CompressionLevelDefault {
+		t.Errorf("FLevelToLevel(100) = %d, want %d", got, CompressionLevelDefault)
+	}
+}
+
+// TestZIPDecompressWithLevel tests decompression with level detection
+func TestZIPDecompressWithLevel(t *testing.T) {
+	data := make([]byte, 1024)
+	for i := range data {
+		data[i] = byte(i % 256)
+	}
+
+	// Compress at different levels and verify detection
+	levels := []CompressionLevel{
+		CompressionLevelBestSpeed,
+		CompressionLevelDefault,
+		CompressionLevelBestSize,
+	}
+
+	for _, level := range levels {
+		t.Run("", func(t *testing.T) {
+			compressed, err := ZIPCompressLevel(data, level)
+			if err != nil {
+				t.Fatalf("Compress error: %v", err)
+			}
+
+			decompressed, flevel, err := ZIPDecompressWithLevel(compressed, len(data))
+			if err != nil {
+				t.Fatalf("DecompressWithLevel error: %v", err)
+			}
+
+			if !bytes.Equal(decompressed, data) {
+				t.Error("Decompressed data mismatch")
+			}
+
+			// Verify flevel is reasonable
+			if flevel < FLevelFastest || flevel > FLevelBest {
+				t.Errorf("Invalid FLevel: %d", flevel)
+			}
+		})
+	}
+}
+
+// TestZIPDecompressWithLevelErrors tests error handling
+func TestZIPDecompressWithLevelErrors(t *testing.T) {
+	// Empty with non-zero expected size
+	_, _, err := ZIPDecompressWithLevel(nil, 10)
+	if err != ErrZIPCorrupted {
+		t.Errorf("Expected ErrZIPCorrupted, got %v", err)
+	}
+
+	// Invalid header
+	_, _, err = ZIPDecompressWithLevel([]byte{0x00, 0x00}, 10)
+	if err != ErrZIPCorrupted {
+		t.Errorf("Expected ErrZIPCorrupted for invalid header, got %v", err)
+	}
+}
+
+// TestZIPPoolReuse tests that pooled writers are properly reused
+func TestZIPPoolReuse(t *testing.T) {
+	data := make([]byte, 100)
+	for i := range data {
+		data[i] = byte(i)
+	}
+
+	// Compress multiple times to exercise pool
+	for i := 0; i < 10; i++ {
+		compressed, err := ZIPCompress(data)
+		if err != nil {
+			t.Fatalf("Compress %d error: %v", i, err)
+		}
+
+		decompressed, err := ZIPDecompress(compressed, len(data))
+		if err != nil {
+			t.Fatalf("Decompress %d error: %v", i, err)
+		}
+
+		if !bytes.Equal(decompressed, data) {
+			t.Errorf("Round-trip %d failed", i)
+		}
+	}
+}
+
+// TestZIPCompressLevelNonDefault tests non-default compression levels
+func TestZIPCompressLevelNonDefault(t *testing.T) {
+	data := make([]byte, 2048)
+	for i := range data {
+		data[i] = byte(i % 256)
+	}
+
+	// Test a range of non-default levels
+	nonDefaultLevels := []CompressionLevel{
+		CompressionLevelHuffmanOnly, // -2
+		CompressionLevelNone,        // 0
+		CompressionLevelBestSpeed,   // 1
+		2, 3, 4, 5,                  // Fast range
+		7, 8, // Better range
+		CompressionLevelBestSize, // 9
+	}
+
+	for _, level := range nonDefaultLevels {
+		t.Run("", func(t *testing.T) {
+			compressed, err := ZIPCompressLevel(data, level)
+			if err != nil {
+				t.Fatalf("ZIPCompressLevel(%d) error: %v", level, err)
+			}
+
+			// Verify decompression
+			decompressed, err := ZIPDecompress(compressed, len(data))
+			if err != nil {
+				t.Fatalf("ZIPDecompress error for level %d: %v", level, err)
+			}
+
+			if !bytes.Equal(decompressed, data) {
+				t.Errorf("Round-trip failed for level %d", level)
+			}
+
+			t.Logf("Level %d: %d -> %d bytes", level, len(data), len(compressed))
+		})
+	}
+}
+
+// TestZIPDecompressToPoolReuse tests pooled reader reuse
+func TestZIPDecompressToPoolReuse(t *testing.T) {
+	data := make([]byte, 500)
+	for i := range data {
+		data[i] = byte(i % 256)
+	}
+
+	compressed, err := ZIPCompress(data)
+	if err != nil {
+		t.Fatalf("Compress error: %v", err)
+	}
+
+	// Decompress multiple times to exercise reader pool reuse
+	for i := 0; i < 20; i++ {
+		dst := make([]byte, len(data))
+		err := ZIPDecompressTo(dst, compressed)
+		if err != nil {
+			t.Fatalf("Decompress %d error: %v", i, err)
+		}
+
+		if !bytes.Equal(dst, data) {
+			t.Errorf("Round-trip %d failed", i)
+		}
+	}
+}
+
+// TestZIPDecompressToLargeData tests with larger data
+func TestZIPDecompressToLargeData(t *testing.T) {
+	data := make([]byte, 65536)
+	for i := range data {
+		data[i] = byte(i % 256)
+	}
+
+	compressed, err := ZIPCompress(data)
+	if err != nil {
+		t.Fatalf("Compress error: %v", err)
+	}
+
+	dst := make([]byte, len(data))
+	err = ZIPDecompressTo(dst, compressed)
+	if err != nil {
+		t.Fatalf("DecompressTo error: %v", err)
+	}
+
+	if !bytes.Equal(dst, data) {
+		t.Error("Large data round-trip failed")
+	}
+}
+
+// TestZIPDecompressToSizeMismatch tests when decompressed size doesn't match expected
+func TestZIPDecompressToSizeMismatch(t *testing.T) {
+	data := []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
+	compressed, err := ZIPCompress(data)
+	if err != nil {
+		t.Fatalf("Compress error: %v", err)
+	}
+
+	// Try with dst larger than actual decompressed size
+	dst := make([]byte, len(data)+10)
+	err = ZIPDecompressTo(dst, compressed)
+	if err == nil {
+		t.Error("Expected error when dst is larger than decompressed data")
+	}
+}
+
+// TestZIPCompressLevelWriteError tests error path during write
+func TestZIPCompressLevelLargeData(t *testing.T) {
+	// Test with large data to exercise the full compression path
+	data := make([]byte, 1024*1024) // 1MB
+	for i := range data {
+		data[i] = byte(i % 256)
+	}
+
+	compressed, err := ZIPCompressLevel(data, CompressionLevelDefault)
+	if err != nil {
+		t.Fatalf("ZIPCompressLevel error: %v", err)
+	}
+
+	// Verify round-trip
+	decompressed, err := ZIPDecompress(compressed, len(data))
+	if err != nil {
+		t.Fatalf("Decompress error: %v", err)
+	}
+
+	if !bytes.Equal(decompressed, data) {
+		t.Error("Large data round-trip failed")
+	}
+
+	t.Logf("Large data compression: %d -> %d bytes (%.1f%%)",
+		len(data), len(compressed), 100.0*float64(len(compressed))/float64(len(data)))
+}
+
+// TestZIPDecompressToSequential exercises the reader pool reset path
+func TestZIPDecompressToSequential(t *testing.T) {
+	// Run many decompressions sequentially to exercise pool reuse and reset paths
+	dataSizes := []int{100, 200, 500, 1000, 2000, 5000}
+
+	for _, size := range dataSizes {
+		data := make([]byte, size)
+		for i := range data {
+			data[i] = byte(i % 256)
+		}
+
+		compressed, err := ZIPCompress(data)
+		if err != nil {
+			t.Fatalf("Compress error for size %d: %v", size, err)
+		}
+
+		// Decompress multiple times
+		for i := 0; i < 5; i++ {
+			dst := make([]byte, size)
+			err = ZIPDecompressTo(dst, compressed)
+			if err != nil {
+				t.Fatalf("DecompressTo error for size %d, iteration %d: %v", size, i, err)
+			}
+
+			if !bytes.Equal(dst, data) {
+				t.Errorf("Mismatch for size %d, iteration %d", size, i)
+			}
+		}
+	}
+}

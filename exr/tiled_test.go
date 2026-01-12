@@ -1655,3 +1655,215 @@ func TestTiledZIPParallelDecompression(t *testing.T) {
 
 	t.Logf("Successfully read %d tiles in parallel across %d workers", numTiles, numWorkers)
 }
+
+// TestTiledReaderNoFrameBuffer tests reading without frame buffer.
+func TestTiledReaderNoFrameBuffer(t *testing.T) {
+	h := NewTiledHeader(64, 64, 32, 32)
+	ws := newMockWriteSeeker()
+	tw, _ := NewTiledWriter(ws, h)
+
+	fb, _ := AllocateChannels(h.Channels(), h.DataWindow())
+	tw.SetFrameBuffer(fb)
+
+	for ty := 0; ty < 2; ty++ {
+		for tx := 0; tx < 2; tx++ {
+			tw.WriteTile(tx, ty)
+		}
+	}
+	tw.Close()
+
+	data := ws.Bytes()
+	reader := &readerAtWrapper{bytes.NewReader(data)}
+	f, _ := OpenReader(reader, int64(len(data)))
+	tr, _ := NewTiledReader(f)
+
+	// Don't set frame buffer
+	err := tr.ReadTile(0, 0)
+	if err == nil {
+		t.Error("ReadTile without frame buffer should error")
+	}
+
+	err = tr.ReadTileLevel(0, 0, 0, 0)
+	if err == nil {
+		t.Error("ReadTileLevel without frame buffer should error")
+	}
+}
+
+// TestTiledWriterInvalidTileCoords tests error handling for invalid tile coords.
+func TestTiledWriterInvalidTileCoords(t *testing.T) {
+	h := NewTiledHeader(64, 64, 32, 32)
+	ws := newMockWriteSeeker()
+	tw, _ := NewTiledWriter(ws, h)
+
+	fb, _ := AllocateChannels(h.Channels(), h.DataWindow())
+	tw.SetFrameBuffer(fb)
+
+	// Write valid tiles first
+	tw.WriteTile(0, 0)
+	tw.WriteTile(1, 0)
+	tw.WriteTile(0, 1)
+	tw.WriteTile(1, 1)
+
+	// Try writing to invalid tile coords
+	err := tw.WriteTile(100, 100)
+	if err == nil {
+		t.Error("WriteTile with invalid coords should error")
+	}
+
+	err = tw.WriteTile(-1, 0)
+	if err == nil {
+		t.Error("WriteTile with negative coords should error")
+	}
+}
+
+// TestTiledWriteTilesLevelMultiple tests WriteTilesLevel with multiple tiles.
+func TestTiledWriteTilesLevelMultiple(t *testing.T) {
+	width := 128
+	height := 128
+	tileSize := 32
+
+	h := NewTiledHeader(width, height, tileSize, tileSize)
+	h.SetCompression(CompressionPIZ)
+
+	ws := newMockWriteSeeker()
+	tw, err := NewTiledWriter(ws, h)
+	if err != nil {
+		t.Fatalf("NewTiledWriter() error = %v", err)
+	}
+
+	fb, _ := AllocateChannels(h.Channels(), h.DataWindow())
+	tw.SetFrameBuffer(fb)
+
+	// Fill with gradient
+	rSlice := fb.Get("R")
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			rSlice.SetFloat32(x, y, float32(x%16)/16.0)
+		}
+	}
+
+	numTilesX := (width + tileSize - 1) / tileSize
+	numTilesY := (height + tileSize - 1) / tileSize
+
+	// Write all tiles at once
+	if err := tw.WriteTilesLevel(0, 0, numTilesX-1, numTilesY-1, 0, 0); err != nil {
+		t.Fatalf("WriteTilesLevel() error = %v", err)
+	}
+
+	tw.Close()
+
+	// Verify the file is readable
+	data := ws.Bytes()
+	reader := &readerAtWrapper{bytes.NewReader(data)}
+	f, err := OpenReader(reader, int64(len(data)))
+	if err != nil {
+		t.Fatalf("OpenReader() error = %v", err)
+	}
+
+	tr, _ := NewTiledReader(f)
+	readFB, _ := AllocateChannels(tr.Header().Channels(), tr.DataWindow())
+	tr.SetFrameBuffer(readFB)
+
+	// Read using ReadTilesLevel
+	if err := tr.ReadTilesLevel(0, 0, numTilesX-1, numTilesY-1, 0, 0); err != nil {
+		t.Fatalf("ReadTilesLevel() error = %v", err)
+	}
+
+	// Verify a few pixels
+	rRead := readFB.Get("R")
+	for y := 0; y < height; y += 20 {
+		for x := 0; x < width; x += 20 {
+			expected := float32(x%16) / 16.0
+			got := rRead.GetFloat32(x, y)
+			if !almostEqual(got, expected, 0.02) {
+				t.Errorf("R at (%d,%d) = %v, want ~%v", x, y, got, expected)
+			}
+		}
+	}
+}
+
+// TestTiledReaderPartCreation tests creating tiled reader for specific parts.
+func TestTiledReaderPartCreation(t *testing.T) {
+	h := NewTiledHeader(64, 64, 32, 32)
+	ws := newMockWriteSeeker()
+	tw, _ := NewTiledWriter(ws, h)
+
+	fb, _ := AllocateChannels(h.Channels(), h.DataWindow())
+	tw.SetFrameBuffer(fb)
+
+	tw.WriteTiles(0, 0, 1, 1)
+	tw.Close()
+
+	data := ws.Bytes()
+	reader := &readerAtWrapper{bytes.NewReader(data)}
+	f, _ := OpenReader(reader, int64(len(data)))
+
+	// Create reader for part 0
+	tr, err := NewTiledReaderPart(f, 0)
+	if err != nil {
+		t.Fatalf("NewTiledReaderPart(0) error = %v", err)
+	}
+
+	if tr.Header() == nil {
+		t.Error("Header should not be nil")
+	}
+
+	// Invalid part should error
+	_, err = NewTiledReaderPart(f, 999)
+	if err == nil {
+		t.Error("NewTiledReaderPart(999) should error")
+	}
+}
+
+// TestTiledRLECompression tests RLE compression specifically.
+func TestTiledRLECompression(t *testing.T) {
+	width := 64
+	height := 64
+	tileSize := 32
+
+	h := NewTiledHeader(width, height, tileSize, tileSize)
+	h.SetCompression(CompressionRLE)
+
+	ws := newMockWriteSeeker()
+	tw, _ := NewTiledWriter(ws, h)
+
+	fb, _ := AllocateChannels(h.Channels(), h.DataWindow())
+	tw.SetFrameBuffer(fb)
+
+	// Create data that compresses well with RLE
+	rSlice := fb.Get("R")
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			// Repeated values compress well
+			rSlice.SetFloat32(x, y, float32(y/8)/8.0)
+		}
+	}
+
+	tw.WriteTiles(0, 0, 1, 1)
+	tw.Close()
+
+	// Read back
+	data := ws.Bytes()
+	reader := &readerAtWrapper{bytes.NewReader(data)}
+	f, _ := OpenReader(reader, int64(len(data)))
+	tr, _ := NewTiledReader(f)
+
+	readFB, _ := AllocateChannels(tr.Header().Channels(), tr.DataWindow())
+	tr.SetFrameBuffer(readFB)
+
+	if err := tr.ReadTiles(0, 0, 1, 1); err != nil {
+		t.Fatalf("ReadTiles() error = %v", err)
+	}
+
+	// Verify lossless round-trip
+	rRead := readFB.Get("R")
+	for y := 0; y < height; y += 8 {
+		for x := 0; x < width; x += 8 {
+			expected := float32(y/8) / 8.0
+			got := rRead.GetFloat32(x, y)
+			if !almostEqual(got, expected, 0.001) {
+				t.Errorf("R at (%d,%d) = %v, want ~%v", x, y, got, expected)
+			}
+		}
+	}
+}

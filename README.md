@@ -66,7 +66,7 @@ Files produced by go-openexr are validated against the OpenEXR project's tools (
 - All standard metadata attributes
 - ID Manifest / Cryptomatte support
 
-Test coverage averages 85%+ across core packages. See [PROGRESS.md](PROGRESS.md) for detailed implementation status.
+Test coverage averages 90%+ across all packages. See [PROGRESS.md](PROGRESS.md) for detailed implementation status.
 
 ## Installation
 
@@ -479,24 +479,17 @@ This implementation is compatible with files created by:
 
 Current test coverage by package:
 
-| Package       | Coverage | Notes                                                                  |
-| ------------- | -------- | ---------------------------------------------------------------------- |
-| `half`        | 94.5%    | Core float16 operations well tested                                    |
-| `compression` | 90.2%    | All codecs tested; some error paths uncovered                          |
-| `exr`         | 85.2%    | Core I/O tested; some deep tiled edge cases                            |
-| `exrmeta`     | 89.7%    | Attribute accessors well tested                                        |
-| `exrutil`     | 71.6%    | Main utilities tested; some error paths                                |
-| `exrid`       | 65.5%    | Manifest creation tested; Cryptomatte parsing paths need more coverage |
-| `internal/*`  | 90%+     | Predictor, interleave, XDR well tested                                 |
-
-### Uncovered Areas
-
-The following areas have lower coverage and could benefit from additional tests:
-
-- **exrid**: `GetManifest()` Cryptomatte parsing path (9.7% - reads Cryptomatte-style attributes from existing files)
-- **exrutil**: `readPixels()` tiled path (50% - tiled image channel extraction)
-- **compression/dwa**: `huffmanDecode()` (0% - alternative Huffman path not exercised)
-- **exr/deep**: Some decompression paths for deep tiled data (25-45%)
+| Package              | Coverage | Notes                                      |
+| -------------------- | -------- | ------------------------------------------ |
+| `half`               | 96.7%    | Core float16 operations                    |
+| `compression`        | 90.6%    | All codecs including HTJ2K                 |
+| `exr`                | 90.0%    | Core I/O, scanline, tiled, deep, multipart |
+| `exrmeta`            | 97.3%    | Attribute accessors                        |
+| `exrutil`            | 91.0%    | Utility functions                          |
+| `exrid`              | 91.2%    | ID manifest and Cryptomatte support        |
+| `internal/xdr`       | 93.0%    | XDR encoding/decoding                      |
+| `internal/interleave`| 90.5%    | Byte interleaving                          |
+| `internal/predictor` | 89.8%    | Predictor operations                       |
 
 ## Documentation
 

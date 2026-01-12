@@ -567,3 +567,431 @@ func BenchmarkDirectionFromCubeFaceAndPosition(b *testing.B) {
 		DirectionFromCubeFaceAndPosition(CubeFacePosX, pos, dataWindow)
 	}
 }
+
+// Tests for RGBA color type
+func TestRGBAAdd(t *testing.T) {
+	c1 := RGBA{R: 1.0, G: 0.5, B: 0.25, A: 1.0}
+	c2 := RGBA{R: 0.5, G: 0.25, B: 0.125, A: 0.5}
+
+	result := c1.Add(c2)
+
+	if !floatEquals(result.R, 1.5, epsilon) {
+		t.Errorf("Add R: got %v, want 1.5", result.R)
+	}
+	if !floatEquals(result.G, 0.75, epsilon) {
+		t.Errorf("Add G: got %v, want 0.75", result.G)
+	}
+	if !floatEquals(result.B, 0.375, epsilon) {
+		t.Errorf("Add B: got %v, want 0.375", result.B)
+	}
+	if !floatEquals(result.A, 1.5, epsilon) {
+		t.Errorf("Add A: got %v, want 1.5", result.A)
+	}
+}
+
+func TestRGBAScale(t *testing.T) {
+	c := RGBA{R: 1.0, G: 0.5, B: 0.25, A: 1.0}
+
+	result := c.Scale(0.5)
+
+	if !floatEquals(result.R, 0.5, epsilon) {
+		t.Errorf("Scale R: got %v, want 0.5", result.R)
+	}
+	if !floatEquals(result.G, 0.25, epsilon) {
+		t.Errorf("Scale G: got %v, want 0.25", result.G)
+	}
+	if !floatEquals(result.B, 0.125, epsilon) {
+		t.Errorf("Scale B: got %v, want 0.125", result.B)
+	}
+	if !floatEquals(result.A, 0.5, epsilon) {
+		t.Errorf("Scale A: got %v, want 0.5", result.A)
+	}
+}
+
+// Tests for EnvMapImage
+func TestNewEnvMapImage(t *testing.T) {
+	img := NewEnvMapImage(EnvMapLatLong, 256, 128)
+
+	if img.Type != EnvMapLatLong {
+		t.Errorf("Type = %v, want EnvMapLatLong", img.Type)
+	}
+	if img.Width != 256 {
+		t.Errorf("Width = %d, want 256", img.Width)
+	}
+	if img.Height != 128 {
+		t.Errorf("Height = %d, want 128", img.Height)
+	}
+	if len(img.Pixels) != 256*128 {
+		t.Errorf("Pixels len = %d, want %d", len(img.Pixels), 256*128)
+	}
+}
+
+func TestEnvMapImageClear(t *testing.T) {
+	img := NewEnvMapImage(EnvMapLatLong, 10, 10)
+
+	// Set some pixels
+	img.Set(5, 5, RGBA{R: 1.0, G: 0.5, B: 0.25, A: 1.0})
+
+	// Clear
+	img.Clear()
+
+	// All pixels should be zero
+	for i, p := range img.Pixels {
+		if p.R != 0 || p.G != 0 || p.B != 0 || p.A != 0 {
+			t.Errorf("Pixel %d not cleared: %v", i, p)
+			break
+		}
+	}
+}
+
+func TestEnvMapImageAtSet(t *testing.T) {
+	img := NewEnvMapImage(EnvMapLatLong, 10, 10)
+
+	// Test Set and At
+	expected := RGBA{R: 1.0, G: 0.5, B: 0.25, A: 0.75}
+	img.Set(5, 5, expected)
+	got := img.At(5, 5)
+
+	if got != expected {
+		t.Errorf("At(5,5) = %v, want %v", got, expected)
+	}
+
+	// Test out-of-bounds At returns zero
+	outOfBounds := img.At(-1, 0)
+	if outOfBounds != (RGBA{}) {
+		t.Errorf("At(-1,0) = %v, want zero RGBA", outOfBounds)
+	}
+
+	outOfBounds = img.At(0, -1)
+	if outOfBounds != (RGBA{}) {
+		t.Errorf("At(0,-1) = %v, want zero RGBA", outOfBounds)
+	}
+
+	outOfBounds = img.At(100, 0)
+	if outOfBounds != (RGBA{}) {
+		t.Errorf("At(100,0) = %v, want zero RGBA", outOfBounds)
+	}
+
+	outOfBounds = img.At(0, 100)
+	if outOfBounds != (RGBA{}) {
+		t.Errorf("At(0,100) = %v, want zero RGBA", outOfBounds)
+	}
+
+	// Test out-of-bounds Set does nothing
+	img.Set(-1, 0, RGBA{R: 1.0})
+	img.Set(100, 0, RGBA{R: 1.0})
+}
+
+func TestEnvMapImageDataWindow(t *testing.T) {
+	img := NewEnvMapImage(EnvMapLatLong, 256, 128)
+
+	dw := img.DataWindow()
+
+	if dw.Min.X != 0 || dw.Min.Y != 0 {
+		t.Errorf("DataWindow Min = %v, want (0,0)", dw.Min)
+	}
+	if dw.Max.X != 255 || dw.Max.Y != 127 {
+		t.Errorf("DataWindow Max = %v, want (255,127)", dw.Max)
+	}
+}
+
+func TestEnvMapImageSample(t *testing.T) {
+	img := NewEnvMapImage(EnvMapLatLong, 4, 4)
+
+	// Set corner pixels for bilinear interpolation test
+	img.Set(0, 0, RGBA{R: 1.0, G: 0.0, B: 0.0, A: 1.0})
+	img.Set(1, 0, RGBA{R: 0.0, G: 1.0, B: 0.0, A: 1.0})
+	img.Set(0, 1, RGBA{R: 0.0, G: 0.0, B: 1.0, A: 1.0})
+	img.Set(1, 1, RGBA{R: 1.0, G: 1.0, B: 1.0, A: 1.0})
+
+	// Sample at exact pixel should give that pixel value
+	exact := img.Sample(0, 0)
+	if !floatEquals(exact.R, 1.0, 0.01) || !floatEquals(exact.G, 0.0, 0.01) {
+		t.Errorf("Sample(0,0) = %v, expected red", exact)
+	}
+
+	// Sample at center should interpolate
+	center := img.Sample(0.5, 0.5)
+	// At center, should be average of 4 corners
+	expectedR := (1.0 + 0.0 + 0.0 + 1.0) / 4
+	expectedG := (0.0 + 1.0 + 0.0 + 1.0) / 4
+	expectedB := (0.0 + 0.0 + 1.0 + 1.0) / 4
+	if !floatEquals(center.R, float32(expectedR), 0.1) {
+		t.Errorf("Sample(0.5,0.5) R = %v, want ~%v", center.R, expectedR)
+	}
+	if !floatEquals(center.G, float32(expectedG), 0.1) {
+		t.Errorf("Sample(0.5,0.5) G = %v, want ~%v", center.G, expectedG)
+	}
+	if !floatEquals(center.B, float32(expectedB), 0.1) {
+		t.Errorf("Sample(0.5,0.5) B = %v, want ~%v", center.B, expectedB)
+	}
+
+	// Test edge clamping
+	edgeSample := img.Sample(-1, -1)
+	// Should clamp to (0,0)
+	if !floatEquals(edgeSample.R, 1.0, 0.01) {
+		t.Errorf("Sample(-1,-1) should clamp to (0,0), got R=%v", edgeSample.R)
+	}
+}
+
+func TestEnvMapImageLookup(t *testing.T) {
+	// Create a simple lat-long environment map
+	img := NewEnvMapImage(EnvMapLatLong, 128, 64)
+
+	// Fill with a gradient based on direction
+	for y := 0; y < 64; y++ {
+		for x := 0; x < 128; x++ {
+			// Set color based on position
+			img.Set(x, y, RGBA{
+				R: float32(x) / 128,
+				G: float32(y) / 64,
+				B: 0.5,
+				A: 1.0,
+			})
+		}
+	}
+
+	// Lookup in positive Z direction (center of lat-long map)
+	dir := V3f{0, 0, 1}
+	result := img.Lookup(dir)
+
+	// Should be near center of the image
+	if result.R < 0.4 || result.R > 0.6 {
+		t.Errorf("Lookup(+Z) R = %v, expected near 0.5", result.R)
+	}
+	if result.G < 0.4 || result.G > 0.6 {
+		t.Errorf("Lookup(+Z) G = %v, expected near 0.5", result.G)
+	}
+}
+
+func TestEnvMapImageLookupCube(t *testing.T) {
+	// Create a cube environment map
+	img := NewEnvMapImage(EnvMapCube, 64, 384) // 64x64 per face, 6 faces
+
+	// Fill with different colors per face
+	faceSize := 64
+	for face := 0; face < 6; face++ {
+		for y := 0; y < faceSize; y++ {
+			for x := 0; x < faceSize; x++ {
+				c := RGBA{A: 1.0}
+				switch face {
+				case CubeFacePosX:
+					c.R = 1.0
+				case CubeFaceNegX:
+					c.R = 0.5
+				case CubeFacePosY:
+					c.G = 1.0
+				case CubeFaceNegY:
+					c.G = 0.5
+				case CubeFacePosZ:
+					c.B = 1.0
+				case CubeFaceNegZ:
+					c.B = 0.5
+				}
+				img.Set(x, face*faceSize+y, c)
+			}
+		}
+	}
+
+	// Lookup in +X direction should give red
+	dirPosX := V3f{1, 0, 0}
+	resultPosX := img.Lookup(dirPosX)
+	if !floatEquals(resultPosX.R, 1.0, 0.1) {
+		t.Errorf("Cube Lookup(+X) R = %v, expected 1.0", resultPosX.R)
+	}
+
+	// Lookup in +Z direction should give blue
+	dirPosZ := V3f{0, 0, 1}
+	resultPosZ := img.Lookup(dirPosZ)
+	if !floatEquals(resultPosZ.B, 1.0, 0.1) {
+		t.Errorf("Cube Lookup(+Z) B = %v, expected 1.0", resultPosZ.B)
+	}
+}
+
+func TestEnvMapImageFilteredLookup(t *testing.T) {
+	// Create a lat-long environment map with uniform color
+	img := NewEnvMapImage(EnvMapLatLong, 64, 32)
+
+	// Fill with uniform color
+	for y := 0; y < 32; y++ {
+		for x := 0; x < 64; x++ {
+			img.Set(x, y, RGBA{R: 0.5, G: 0.5, B: 0.5, A: 1.0})
+		}
+	}
+
+	// Filtered lookup should return approximately the same value
+	dir := V3f{0, 0, 1}
+	result := img.FilteredLookup(dir, 0.1, 3) // Small radius, 3x3 samples
+
+	if !floatEquals(result.R, 0.5, 0.1) {
+		t.Errorf("FilteredLookup R = %v, expected ~0.5", result.R)
+	}
+
+	// Test zero direction returns zero
+	zeroDir := V3f{0, 0, 0}
+	zeroResult := img.FilteredLookup(zeroDir, 0.1, 3)
+	if zeroResult.R != 0 || zeroResult.G != 0 || zeroResult.B != 0 {
+		t.Errorf("FilteredLookup with zero direction should return zero, got %v", zeroResult)
+	}
+}
+
+func TestCubePixelPositionFromFacePositionAllFaces(t *testing.T) {
+	dataWindow := Box2i{Min: V2i{0, 0}, Max: V2i{63, 383}}
+
+	// Test all 6 faces to ensure the switch statement is fully covered
+	testCases := []struct {
+		face     int
+		position V2f
+	}{
+		{CubeFacePosX, V2f{32, 32}},
+		{CubeFaceNegX, V2f{32, 32}},
+		{CubeFacePosY, V2f{32, 32}},
+		{CubeFaceNegY, V2f{32, 32}},
+		{CubeFacePosZ, V2f{32, 32}},
+		{CubeFaceNegZ, V2f{32, 32}},
+	}
+
+	for _, tc := range testCases {
+		pos := CubePixelPositionFromFacePosition(tc.face, tc.position, dataWindow)
+		// Just verify we get valid coordinates
+		if pos.X < 0 || pos.X > 63 || pos.Y < 0 || pos.Y > 383 {
+			t.Errorf("Face %d: CubePixelPositionFromFacePosition returned out of bounds: %v", tc.face, pos)
+		}
+	}
+}
+
+func TestDirectionFromCubeFaceAndPositionDefaultCase(t *testing.T) {
+	dataWindow := Box2i{Min: V2i{0, 0}, Max: V2i{63, 383}}
+
+	// Test with invalid face number (should hit default case)
+	dir := DirectionFromCubeFaceAndPosition(99, V2f{32, 32}, dataWindow)
+
+	// Default case returns {X: 1, Y: 0, Z: 0}
+	if dir.X != 1 {
+		t.Errorf("Invalid face should default to +X direction, got X=%v", dir.X)
+	}
+}
+
+// TestEnvMapImageSampleBilinear tests bilinear interpolation sampling
+func TestEnvMapImageSampleBilinear(t *testing.T) {
+	// Create a 4x4 test image with known values
+	img := NewEnvMapImage(EnvMapLatLong, 4, 4)
+
+	// Set corner values
+	img.Set(0, 0, RGBA{R: 0.0, G: 0.0, B: 0.0, A: 1.0})
+	img.Set(1, 0, RGBA{R: 1.0, G: 0.0, B: 0.0, A: 1.0})
+	img.Set(0, 1, RGBA{R: 0.0, G: 1.0, B: 0.0, A: 1.0})
+	img.Set(1, 1, RGBA{R: 1.0, G: 1.0, B: 1.0, A: 1.0})
+
+	// Sample at exact pixel positions
+	p00 := img.Sample(0, 0)
+	if !floatEquals(p00.R, 0.0, epsilon) || !floatEquals(p00.G, 0.0, epsilon) {
+		t.Errorf("Sample(0,0) = %v, expected R=0 G=0", p00)
+	}
+
+	p10 := img.Sample(1, 0)
+	if !floatEquals(p10.R, 1.0, epsilon) || !floatEquals(p10.G, 0.0, epsilon) {
+		t.Errorf("Sample(1,0) = %v, expected R=1 G=0", p10)
+	}
+
+	// Sample at interpolated position (center of 2x2)
+	pCenter := img.Sample(0.5, 0.5)
+	if !floatEquals(pCenter.R, 0.5, 0.01) {
+		t.Errorf("Sample(0.5,0.5) R = %v, expected ~0.5", pCenter.R)
+	}
+	if !floatEquals(pCenter.G, 0.5, 0.01) {
+		t.Errorf("Sample(0.5,0.5) G = %v, expected ~0.5", pCenter.G)
+	}
+}
+
+// TestEnvMapImageSampleEdgeCases tests Sample boundary clamping
+func TestEnvMapImageSampleEdgeCases(t *testing.T) {
+	img := NewEnvMapImage(EnvMapLatLong, 4, 4)
+
+	// Set all pixels to a known value
+	for y := 0; y < 4; y++ {
+		for x := 0; x < 4; x++ {
+			img.Set(x, y, RGBA{R: 0.5, G: 0.5, B: 0.5, A: 1.0})
+		}
+	}
+
+	// Sample at negative coordinates - should clamp to 0
+	pNegX := img.Sample(-1, 0)
+	if pNegX.R == 0 && pNegX.G == 0 && pNegX.B == 0 {
+		t.Error("Sample(-1,0) should return valid value, not zero")
+	}
+
+	pNegY := img.Sample(0, -1)
+	if pNegY.R == 0 && pNegY.G == 0 && pNegY.B == 0 {
+		t.Error("Sample(0,-1) should return valid value, not zero")
+	}
+
+	// Sample at coordinates beyond image bounds - should clamp to max
+	pOverX := img.Sample(10, 0)
+	if !floatEquals(pOverX.R, 0.5, epsilon) {
+		t.Errorf("Sample(10,0) R = %v, expected 0.5", pOverX.R)
+	}
+
+	pOverY := img.Sample(0, 10)
+	if !floatEquals(pOverY.R, 0.5, epsilon) {
+		t.Errorf("Sample(0,10) R = %v, expected 0.5", pOverY.R)
+	}
+
+	// Sample at both negative (covers x0, x1, y0, y1 < 0 branches)
+	pNegBoth := img.Sample(-2, -2)
+	if !floatEquals(pNegBoth.R, 0.5, epsilon) {
+		t.Errorf("Sample(-2,-2) R = %v, expected 0.5", pNegBoth.R)
+	}
+
+	// Sample at both over bounds
+	pOverBoth := img.Sample(10, 10)
+	if !floatEquals(pOverBoth.R, 0.5, epsilon) {
+		t.Errorf("Sample(10,10) R = %v, expected 0.5", pOverBoth.R)
+	}
+}
+
+// TestEnvMapImageSampleLargeCoordinates tests Sample with very large coordinates
+func TestEnvMapImageSampleLargeCoordinates(t *testing.T) {
+	img := NewEnvMapImage(EnvMapLatLong, 4, 4)
+
+	// Set all pixels
+	for y := 0; y < 4; y++ {
+		for x := 0; x < 4; x++ {
+			img.Set(x, y, RGBA{R: 0.5, G: 0.5, B: 0.5, A: 1.0})
+		}
+	}
+
+	// Sample at very large coordinates
+	p := img.Sample(1000, 1000)
+	if !floatEquals(p.R, 0.5, epsilon) {
+		t.Errorf("Sample(1000,1000) R = %v, expected 0.5", p.R)
+	}
+
+	// Sample at very negative coordinates
+	pNeg := img.Sample(-1000, -1000)
+	if !floatEquals(pNeg.R, 0.5, epsilon) {
+		t.Errorf("Sample(-1000,-1000) R = %v, expected 0.5", pNeg.R)
+	}
+}
+
+// TestEnvMapImageSampleFractional tests Sample at fractional positions
+func TestEnvMapImageSampleFractional(t *testing.T) {
+	// Create 2x2 image with gradient
+	img := NewEnvMapImage(EnvMapLatLong, 2, 2)
+	img.Set(0, 0, RGBA{R: 0.0, G: 0.0, B: 0.0, A: 1.0})
+	img.Set(1, 0, RGBA{R: 1.0, G: 0.0, B: 0.0, A: 1.0})
+	img.Set(0, 1, RGBA{R: 0.0, G: 1.0, B: 0.0, A: 1.0})
+	img.Set(1, 1, RGBA{R: 1.0, G: 1.0, B: 0.0, A: 1.0})
+
+	// Sample at 25% position
+	p25 := img.Sample(0.25, 0)
+	if !floatEquals(p25.R, 0.25, 0.01) {
+		t.Errorf("Sample(0.25,0) R = %v, expected ~0.25", p25.R)
+	}
+
+	// Sample at 75% position
+	p75 := img.Sample(0.75, 0)
+	if !floatEquals(p75.R, 0.75, 0.01) {
+		t.Errorf("Sample(0.75,0) R = %v, expected ~0.75", p75.R)
+	}
+}

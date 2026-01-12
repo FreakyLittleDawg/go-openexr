@@ -781,3 +781,71 @@ func TestHeaderCompressionAccessor(t *testing.T) {
 		t.Errorf("Compression() = %v, want PIZ", h.Compression())
 	}
 }
+
+func TestHeaderZIPLevelAccessors(t *testing.T) {
+	h := NewScanlineHeader(64, 64)
+
+	// Test SetZIPLevel
+	h.SetZIPLevel(6)
+	if h.ZIPLevel() != 6 {
+		t.Errorf("ZIPLevel() = %v, want 6", h.ZIPLevel())
+	}
+
+	// Test SetZIPLevel with different value
+	h.SetZIPLevel(9)
+	if h.ZIPLevel() != 9 {
+		t.Errorf("ZIPLevel() after second set = %v, want 9", h.ZIPLevel())
+	}
+}
+
+func TestHeaderDetectedFLevel(t *testing.T) {
+	h := NewScanlineHeader(64, 64)
+
+	// Test default - not detected
+	flevel, detected := h.DetectedFLevel()
+	if detected {
+		t.Errorf("DetectedFLevel should return false for new header")
+	}
+	_ = flevel
+
+	// After reading a ZIP file, this would be set by the reader
+	// We can't easily test that without a full roundtrip
+}
+
+func TestHeaderCompressionOptions(t *testing.T) {
+	h := NewScanlineHeader(64, 64)
+
+	// Test CompressionOptions getter - default is -1 (DefaultCompression)
+	opts := h.CompressionOptions()
+	defaultLevel := opts.ZIPLevel
+	t.Logf("Default ZIPLevel = %v", defaultLevel)
+
+	// Test SetCompressionOptions
+	newOpts := CompressionOptions{
+		ZIPLevel: 9,
+	}
+	h.SetCompressionOptions(newOpts)
+
+	got := h.CompressionOptions()
+	if got.ZIPLevel != 9 {
+		t.Errorf("CompressionOptions().ZIPLevel = %v, want 9", got.ZIPLevel)
+	}
+}
+
+func TestNewTiledHeaderWithDefaults(t *testing.T) {
+	h := NewTiledHeader(256, 256, 64, 64)
+
+	// Verify tile description
+	td := h.TileDescription()
+	if td == nil {
+		t.Fatal("TileDescription should not be nil")
+	}
+	if td.XSize != 64 || td.YSize != 64 {
+		t.Errorf("Tile size = %dx%d, want 64x64", td.XSize, td.YSize)
+	}
+
+	// Verify it's marked as tiled
+	if !h.IsTiled() {
+		t.Error("IsTiled() should be true")
+	}
+}
