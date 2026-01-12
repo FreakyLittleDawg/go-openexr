@@ -1,0 +1,13 @@
+# Ignore all downloaded test data files
+# These are external files that should not be committed to the repository
+
+# Cryptomatte sample files from Psyop/Cryptomatte
+cryptomatte/*.exr
+
+# Other external test data
+*.exr
+
+# Keep the directory structure and documentation
+!.gitignore
+!README.md
+!download.sh

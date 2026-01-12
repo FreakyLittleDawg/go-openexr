@@ -1,0 +1,61 @@
+# Compiled binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+cover.html
+
+# Profiling output
+*.prof
+*.pprof
+
+# Binary outputs from cmd/
+/exrcheck
+/exrinfo
+/exrheader
+/exrmaketiled
+/exrmetrics
+/exrmultipart
+/exrmultiview
+/exr2aces
+/exrenvmap
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Go workspace
+go.work
+go.work.sum
+
+# Vendor directory (if using vendoring)
+vendor/
+
+# Forks and upstream references
+/upstream/
+
+# AI assistant local files
+.claude/
+CLAUDE.md
+.ash/
+
+# Build artifacts
+/dist/
+/bin/
+
+# Test output files
+*.exr.tmp
+/testdata/output/
+fuzz-logs/
