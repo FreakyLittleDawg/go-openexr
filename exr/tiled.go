@@ -63,6 +63,12 @@ func NewTiledReaderPart(f *File, part int) (*TiledReader, error) {
 	if cl == nil || cl.Len() == 0 {
 		return nil, errors.New("exr: missing or empty channels attribute")
 	}
+	// Validate all channels have known pixel types
+	for i := 0; i < cl.Len(); i++ {
+		if cl.At(i).Type.Size() == 0 {
+			return nil, errors.New("exr: channel has unknown pixel type")
+		}
+	}
 
 	dw := h.DataWindow()
 

@@ -54,6 +54,38 @@ For testing with real EXR files, download test images from the [openexr-images](
 
 4. Push and create a pull request
 
+### Design Philosophy
+
+This library follows several core principles that guide design decisions:
+
+**Caller validates, callee assumes.** Public functions validate inputs at API boundaries and return meaningful errors. Internal methods and unexported functions assume they receive valid data. Do not add defensive nil checks to method receivers—a panic on nil dereference points directly to the bug; a silent fallback masks it.
+
+```go
+// Good: Validate at the entry point
+func NewScanlineReader(f *File) (*ScanlineReader, error) {
+    if f == nil {
+        return nil, ErrInvalidFile
+    }
+    // ... rest of function assumes f is valid
+}
+
+// Bad: Defensive check inside method
+func (r *ScanlineReader) ReadRow() error {
+    if r == nil {  // Don't do this
+        return nil
+    }
+    // ...
+}
+```
+
+**Fail fast.** Return errors for conditions callers can handle (malformed files, missing attributes). Let programmer errors (violated invariants, nil receivers) panic—the stack trace identifies the bug immediately.
+
+**Performance is a feature.** This is an image processing library handling large data. Avoid per-call overhead in hot paths: no redundant validation, minimize allocations, prefer stack over heap. Validate once at boundaries, then trust the data internally.
+
+**Security through structured validation.** Malformed inputs are caught by validation at parsing boundaries, not scattered defensive checks. Fuzz testing continuously probes edge cases. When fuzzing finds a crash, fix it with proper validation where the data enters the system.
+
+**Errors are for callers.** Return errors when callers can reasonably act on them. Use specific error types or messages that help diagnose issues. Avoid generic errors like "invalid data"—say what's invalid and why.
+
 ### Coding Standards
 
 - Follow standard Go conventions and idioms
@@ -62,6 +94,7 @@ For testing with real EXR files, download test images from the [openexr-images](
 - Update documentation for API changes
 - Prefer short, clear functions over deeply nested code
 - Use meaningful variable and function names
+- Prefer early returns over deep nesting
 
 ### Commit Messages
 
