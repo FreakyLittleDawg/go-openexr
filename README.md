@@ -2,6 +2,7 @@
 
 A pure Go implementation of the OpenEXR image file format.
 
+[![CI](https://github.com/mrjoshuak/go-openexr/actions/workflows/ci.yml/badge.svg)](https://github.com/mrjoshuak/go-openexr/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/mrjoshuak/go-openexr.svg)](https://pkg.go.dev/github.com/mrjoshuak/go-openexr)
 [![Go Report Card](https://goreportcard.com/badge/github.com/mrjoshuak/go-openexr)](https://goreportcard.com/report/github.com/mrjoshuak/go-openexr)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
