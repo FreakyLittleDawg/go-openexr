@@ -1,5 +1,5 @@
 go-openexr
-Copyright 2024-2025 Joshua Kaplan and the go-openexr contributors
+Copyright 2025-2026 Joshua Kolden and the go-openexr contributors
 
 This product is a pure Go implementation of the OpenEXR file format.
 It does not contain any code from the reference C++ OpenEXR implementation,
