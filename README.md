@@ -69,6 +69,42 @@ Files produced by go-openexr are validated against the OpenEXR project's tools (
 
 Test coverage averages 90%+ across all packages. See [PROGRESS.md](PROGRESS.md) for detailed implementation status.
 
+## Security
+
+Security is a priority for go-openexr. Image parsers are a common attack vector, and we take proactive steps to ensure robustness against malformed or malicious input.
+
+### Continuous Fuzz Testing
+
+We use Go's built-in fuzzing framework to continuously test all parsing code paths:
+
+- **Compression codecs**: All 10 decompressors are fuzz-tested (RLE, ZIP, PIZ, PXR24, B44, DWAA, etc.)
+- **File parsing**: Header parsing, attribute decoding, and offset table validation
+- **Reader APIs**: ScanlineReader and TiledReader with arbitrary input
+
+Fuzz tests run for extended periods (hours to days) to discover edge cases that unit tests miss.
+
+### Input Validation
+
+All data entering the system is validated at parsing boundaries:
+
+- **Bounds checking**: Array indices, slice lengths, and buffer sizes are validated before use
+- **Integer overflow protection**: Arithmetic operations that could overflow are checked
+- **Resource limits**: Maximum dimensions (64K x 64K) and allocation sizes prevent DoS attacks
+- **Malformed data rejection**: Invalid compression parameters, pixel types, and sampling values are rejected with clear errors
+
+### Memory Safety
+
+As a pure Go implementation, go-openexr benefits from Go's memory safety guarantees:
+
+- No buffer overflows from unchecked pointer arithmetic
+- No use-after-free or double-free vulnerabilities
+- Automatic bounds checking on all slice and array accesses
+- Garbage collection prevents memory leaks
+
+### Reporting Security Issues
+
+If you discover a security vulnerability, please report it privately by emailing the maintainers rather than opening a public issue. We take all reports seriously and will respond promptly.
+
 ## Installation
 
 ```bash
@@ -93,14 +129,14 @@ import (
 
 func main() {
     // Open the file
-    file, err := exr.Open("image.exr")
+    file, err := exr.OpenFile("image.exr")
     if err != nil {
         log.Fatal(err)
     }
     defer file.Close()
 
-    // Get image dimensions
-    header := file.Header()
+    // Get image dimensions (part 0 for single-part files)
+    header := file.Header(0)
     dataWindow := header.DataWindow()
     width := dataWindow.Max.X - dataWindow.Min.X + 1
     height := dataWindow.Max.Y - dataWindow.Min.Y + 1
@@ -108,13 +144,21 @@ func main() {
     fmt.Printf("Image size: %dx%d\n", width, height)
 
     // List channels
-    for _, ch := range header.Channels() {
+    channels := header.Channels()
+    for i := 0; i < channels.Len(); i++ {
+        ch := channels.At(i)
         fmt.Printf("Channel: %s (%v)\n", ch.Name, ch.Type)
     }
 
-    // Read pixels into RGBA buffer
+    // Read pixels into RGBA buffer using the high-level API
+    rgbaFile, err := exr.OpenRGBAInputFile("image.exr")
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer rgbaFile.Close()
+
     pixels := make([]exr.RGBA, width*height)
-    if err := file.ReadRGBA(pixels); err != nil {
+    if err := rgbaFile.ReadPixels(pixels); err != nil {
         log.Fatal(err)
     }
 }
@@ -176,13 +220,13 @@ func main() {
     header := exr.NewHeader(width, height)
     header.SetCompression(exr.CompressionZIP)
 
-    // Add channels
-    header.Channels().Insert("R", exr.Channel{Type: exr.PixelTypeHalf})
-    header.Channels().Insert("G", exr.Channel{Type: exr.PixelTypeHalf})
-    header.Channels().Insert("B", exr.Channel{Type: exr.PixelTypeHalf})
-    header.Channels().Insert("Z", exr.Channel{Type: exr.PixelTypeFloat})
+    // Add channels (Name is required, XSampling/YSampling default to 1)
+    header.Channels().Add(exr.Channel{Name: "R", Type: exr.PixelTypeHalf, XSampling: 1, YSampling: 1})
+    header.Channels().Add(exr.Channel{Name: "G", Type: exr.PixelTypeHalf, XSampling: 1, YSampling: 1})
+    header.Channels().Add(exr.Channel{Name: "B", Type: exr.PixelTypeHalf, XSampling: 1, YSampling: 1})
+    header.Channels().Add(exr.Channel{Name: "Z", Type: exr.PixelTypeFloat, XSampling: 1, YSampling: 1})
 
-    // Create frame buffer
+    // Create pixel data
     rPixels := make([]half.Half, width*height)
     gPixels := make([]half.Half, width*height)
     bPixels := make([]half.Half, width*height)
@@ -190,11 +234,12 @@ func main() {
 
     // Fill pixel data...
 
+    // Create frame buffer with slices
     fb := exr.NewFrameBuffer()
-    fb.Insert("R", exr.Slice{Type: exr.PixelTypeHalf, Data: rPixels})
-    fb.Insert("G", exr.Slice{Type: exr.PixelTypeHalf, Data: gPixels})
-    fb.Insert("B", exr.Slice{Type: exr.PixelTypeHalf, Data: bPixels})
-    fb.Insert("Z", exr.Slice{Type: exr.PixelTypeFloat, Data: zPixels})
+    fb.Insert("R", exr.NewSliceFromHalf(rPixels, width, height))
+    fb.Insert("G", exr.NewSliceFromHalf(gPixels, width, height))
+    fb.Insert("B", exr.NewSliceFromHalf(bPixels, width, height))
+    fb.Insert("Z", exr.NewSliceFromFloat32(zPixels, width, height))
 
     // Write file
     writer, err := exr.NewWriter("output.exr", header)
@@ -416,19 +461,24 @@ type Channel struct {
 ```go
 type Slice struct {
     Type      PixelType
-    Data      interface{}
-    XStride   int
-    YStride   int
-    XSampling int
-    YSampling int
+    Base      unsafe.Pointer  // Pointer to pixel at (0, 0)
+    XStride   int             // Bytes between adjacent pixels in a row
+    YStride   int             // Bytes between adjacent rows
+    XSampling int             // Horizontal subsampling (1 = full resolution)
+    YSampling int             // Vertical subsampling (1 = full resolution)
 }
+
+// Convenience constructors
+func NewSliceFromHalf(data []half.Half, width, height int) Slice
+func NewSliceFromFloat32(data []float32, width, height int) Slice
+func NewSliceFromUint32(data []uint32, width, height int) Slice
 
 type FrameBuffer struct {
     // Slice storage
 }
 
 func NewFrameBuffer() *FrameBuffer
-func (fb *FrameBuffer) Insert(name string, slice Slice)
+func (fb *FrameBuffer) Insert(name string, slice Slice) error
 ```
 
 ### Options
@@ -452,8 +502,9 @@ exr.WithThreads(4)
 The library uses Go's concurrency for parallel encoding/decoding:
 
 ```go
-// Configure thread count
-file, err := exr.Open("large.exr", exr.WithThreads(8))
+// Configure thread count for parallel decompression
+file, err := exr.OpenFile("large.exr")
+// Thread count is configured at the reader level
 ```
 
 ### Memory Usage
@@ -461,9 +512,13 @@ file, err := exr.Open("large.exr", exr.WithThreads(8))
 For large files, use streaming APIs:
 
 ```go
-reader, err := exr.Open("huge.exr")
+file, err := exr.OpenFile("huge.exr")
+defer file.Close()
+
+sr, err := exr.NewScanlineReader(file)
+// Set up frame buffer, then read scanlines incrementally
 for y := dataWindow.Min.Y; y <= dataWindow.Max.Y; y++ {
-    err := reader.ReadScanlines(y, y)
+    err := sr.ReadPixels(int(y), int(y))
     // Process scanline...
 }
 ```
