@@ -523,17 +523,33 @@ func (d *DwaDecompressor) Decompress(src []byte, dst []byte) error {
 		return ErrDwaCorruptData
 	}
 
-	// Locate compressed data sections
-	compressedUnknownBuf := src[dataPtr : dataPtr+int(unknownCompressedSize)]
-	dataPtr += int(unknownCompressedSize)
+	// Locate compressed data sections with individual bounds checking
+	endPtr := dataPtr + int(unknownCompressedSize)
+	if endPtr < dataPtr || endPtr > len(src) {
+		return ErrDwaCorruptData
+	}
+	compressedUnknownBuf := src[dataPtr:endPtr]
+	dataPtr = endPtr
 
-	compressedAcBuf := src[dataPtr : dataPtr+int(acCompressedSize)]
-	dataPtr += int(acCompressedSize)
+	endPtr = dataPtr + int(acCompressedSize)
+	if endPtr < dataPtr || endPtr > len(src) {
+		return ErrDwaCorruptData
+	}
+	compressedAcBuf := src[dataPtr:endPtr]
+	dataPtr = endPtr
 
-	compressedDcBuf := src[dataPtr : dataPtr+int(dcCompressedSize)]
-	dataPtr += int(dcCompressedSize)
+	endPtr = dataPtr + int(dcCompressedSize)
+	if endPtr < dataPtr || endPtr > len(src) {
+		return ErrDwaCorruptData
+	}
+	compressedDcBuf := src[dataPtr:endPtr]
+	dataPtr = endPtr
 
-	compressedRleBuf := src[dataPtr : dataPtr+int(rleCompressedSize)]
+	endPtr = dataPtr + int(rleCompressedSize)
+	if endPtr < dataPtr || endPtr > len(src) {
+		return ErrDwaCorruptData
+	}
+	compressedRleBuf := src[dataPtr:endPtr]
 
 	// Decompress UNKNOWN data
 	var unknownData []byte
